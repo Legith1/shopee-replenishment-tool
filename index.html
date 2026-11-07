@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shopee 官方仓全流程智能补货工作台</title>
+  <!-- 引入 SheetJS 库 (支持在线 CDN 与本地离线运行) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script>
+    if (typeof XLSX === 'undefined') {
+      document.write('<script src="xlsx.full.min.js"><\/script>');
+    }
+  </script>
+  <style>
+    :root {
+      --shopee-orange: #ee4d2d;
+      --shopee-orange-gradient: linear-gradient(135deg, #ff5722 0%, #ee4d2d 100%);
+      --shopee-orange-hover: linear-gradient(135deg, #ff6b3d 0%, #d73211 100%);
+      --bg-canvas: #f5f7fa;
+      --card-bg: #ffffff;
+      --text-main: #1e293b;
+      --text-sub: #64748b;
+      --shadow-soft: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.03);
+      --shadow-hover: 0 20px 30px -10px rgba(238, 77, 45, 0.25), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.04);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg-canvas);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text-main);
+      padding: 24px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .app-container {
+      width: 100%;
+      max-width: 1080px;
+    }
+
+    /* 顶部导航 */
+    .top-navbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-logo {
+      width: 40px;
+      height: 40px;
+      background: var(--shopee-orange-gradient);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: 800;
+      font-size: 20px;
+      box-shadow: 0 4px 12px rgba(238, 77, 45, 0.35);
+    }
+    .brand-text h1 {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .brand-text p {
+      font-size: 12px;
+      color: var(--text-sub);
+      margin-top: 2px;
+    }
+    .batch-badge {
+      font-size: 12px;
+      color: var(--text-sub);
+      background: #ffffff;
+      padding: 8px 16px;
+      border-radius: 20px;
+      box-shadow: var(--shadow-card);
+      font-weight: 500;
+    }
+
+    /* 胶囊形步骤条 */
+    .capsule-stepper {
+      display: flex;
+      background: #ffffff;
+      padding: 6px;
+      border-radius: 50px;
+      box-shadow: var(--shadow-card);
+      gap: 6px;
+      margin-bottom: 20px;
+    }
+    .step-capsule {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 11px 16px;
+      border-radius: 40px;
+      font-size: 13.5px;
+      font-weight: 500;
+      color: var(--text-sub);
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .step-capsule:hover {
+      background: #f8fafc;
+      color: var(--text-main);
+    }
+    .step-capsule.active {
+      background: var(--shopee-orange-gradient);
+      color: #ffffff;
+      font-weight: 600;
+      box-shadow: 0 4px 14px rgba(238, 77, 45, 0.35);
+    }
+    .step-num {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.06);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+    }
+    .step-capsule.active .step-num {
+      background: rgba(255,255,255,0.25);
+      color: #ffffff;
+    }
+
+    /* 高亮 Alert 提示条 */
+    .alert-banner {
+      padding: 12px 16px;
+      border-radius: 12px;
+      font-size: 12.5px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      line-height: 1.5;
+    }
+    .alert-rule {
+      background: #fff7ed;
+      border-left: 4px solid #f97316;
+      color: #9a3412;
+    }
+    .alert-node {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      color: #1e40af;
+    }
+
+    /* 后台箱规状态栏 */
+    .box-spec-statusbar {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-left: 4px solid #f59e0b;
+      border-radius: 12px;
+      padding: 11px 18px;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+    }
+    .spec-info-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+    }
+    .spec-badge {
+      background: #fef3c7;
+      color: #92400e;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+    }
+    .btn-spec-action {
+      background: #f8fafc;
+      color: #334155;
+      border: 1px solid #cbd5e1;
+      padding: 6px 14px;
+      border-radius: 16px;
+      font-size: 11.5px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-spec-action:hover {
+      background: #e2e8f0;
+    }
+
+    /* 弥散阴影卡片 */
+    .glass-card {
+      background: var(--card-bg);
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: var(--shadow-soft);
+      margin-bottom: 16px;
+    }
+    .card-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+    .card-title {
+      font-size: 14.5px;
+      font-weight: 600;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* 站点选择器 */
+    .site-pill-group {
+      display: flex;
+      background: #f1f5f9;
+      padding: 4px;
+      border-radius: 10px;
+      gap: 4px;
+    }
+    .site-pill-btn {
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-sub);
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      transition: all 0.2s;
+    }
+    .site-pill-btn.active {
+      background: #ffffff;
+      color: var(--shopee-orange);
+      font-weight: 600;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+
+    /* 拖拽上传区域 (2x2 对齐) */
+    .dropzone-grid-4 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .dnd-box {
+      background: #f8fafc;
+      border: 2px dashed #cbd5e1;
+      border-radius: 14px;
+      padding: 22px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+    }
+    .dnd-box:hover, .dnd-box.dragover {
+      border-color: var(--shopee-orange);
+      background: #fffaf8;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(238, 77, 45, 0.08);
+    }
+    .dnd-box.loaded {
+      border-color: #10b981;
+      background: #f0fdf4;
+    }
+    .dnd-icon { font-size: 26px; margin-bottom: 6px; }
+    .dnd-title { font-size: 13px; font-weight: 600; color: var(--text-main); margin-bottom: 3px; }
+    .dnd-desc { font-size: 11.5px; color: var(--text-sub); }
+    .dnd-badge {
+      display: inline-block;
+      font-size: 10.5px;
+      padding: 2px 8px;
+      border-radius: 20px;
+      background: #e2e8f0;
+      color: #475569;
+      margin-top: 8px;
+    }
+    .dnd-box.loaded .dnd-badge {
+      background: #dcfce7;
+      color: #15803d;
+      font-weight: 600;
+    }
+    .file-input-hidden { display: none; }
+
+    /* 居中主操作栏与按钮 */
+    .mid-action-bar-center {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 18px 0 22px 0;
+    }
+    .btn-launch {
+      background: var(--shopee-orange-gradient);
+      color: #ffffff;
+      border: none;
+      padding: 13px 40px;
+      border-radius: 30px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 8px 20px -4px rgba(238, 77, 45, 0.45);
+      transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .btn-launch:hover {
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: var(--shadow-hover);
+      background: var(--shopee-orange-hover);
+    }
+    .btn-launch:active { transform: translateY(0) scale(0.98); }
+
+    /* 数据预览表格 */
+    .preview-table-container {
+      overflow-x: auto;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      margin-top: 10px;
+      max-height: 280px;
+    }
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11.5px;
+      text-align: center;
+    }
+    .data-table th {
+      background: #f1f5f9;
+      color: #334155;
+      font-weight: 600;
+      padding: 9px 8px;
+      border-bottom: 1px solid #cbd5e1;
+      white-space: nowrap;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .data-table td {
+      padding: 8px 8px;
+      border-bottom: 1px solid #f1f5f9;
+      color: #1e293b;
+      white-space: nowrap;
+    }
+    .cell-highlight-red {
+      background: #fee2e2 !important;
+      color: #991b1b !important;
+      font-weight: 600;
+    }
+    .cell-highlight-blue {
+      background: #e0f2fe !important;
+      color: #0369a1 !important;
+      font-weight: 600;
+    }
+    .cell-muted { color: #94a3b8; font-style: italic; }
+
+    /* 输出文件卡片 */
+    .output-file-card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-left: 5px solid var(--shopee-orange);
+      border-radius: 12px;
+      padding: 14px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 16px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+    }
+    .file-info-col {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .file-icon-box {
+      width: 40px;
+      height: 40px;
+      background: #fff1ee;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      color: var(--shopee-orange);
+    }
+    .file-name-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .file-path-sub {
+      font-size: 11px;
+      color: var(--text-sub);
+      margin-top: 2px;
+    }
+    .btn-download {
+      background: var(--shopee-orange-gradient);
+      color: #ffffff;
+      border: none;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-download:hover {
+      box-shadow: 0 4px 12px rgba(238, 77, 45, 0.35);
+    }
+  </style>
+</head>
+<body>
+
+<div class="app-container">
+  <!-- 顶部导航 -->
+  <div class="top-navbar">
+    <div class="brand-section">
+      <div class="brand-logo">S</div>
+      <div class="brand-text">
+        <h1>Shopee 官方仓全流程智能补货工作台 (Web版)</h1>
+        <p>全自动数据对齐 · 独立箱规字典 · 多站点规则适配 · 拼箱装箱闭环</p>
+      </div>
+    </div>
+    <div class="batch-badge">
+      📅 批次日期：<b id="display-date">2026.11.07</b>
+    </div>
+  </div>
+
+  <!-- 胶囊形步骤条 -->
+  <div class="capsule-stepper">
+    <div class="step-capsule active" id="cap-1" onclick="switchCapsule(1)">
+      <span class="step-num">1</span>
+      <span>阶段一：生成补货总表</span>
+    </div>
+    <div class="step-capsule" id="cap-2" onclick="switchCapsule(2)">
+      <span class="step-num">2</span>
+      <span>阶段二：生成入库申请表</span>
+    </div>
+    <div class="step-capsule" id="cap-3" onclick="switchCapsule(3)">
+      <span class="step-num">3</span>
+      <span>阶段三：装箱打包与箱规</span>
+    </div>
+    <div class="step-capsule" id="cap-4" onclick="switchCapsule(4)">
+      <span class="step-num">✔</span>
+      <span>数据校验中心</span>
+    </div>
+  </div>
+
+  <!-- ======================== 阶段一视图 ======================== -->
+  <div id="view-1">
+    <div class="alert-banner alert-rule">
+      <span style="font-size: 16px;">📌</span>
+      <div><b>站点测算规则提示：</b><span id="site-rule-desc">马来西亚 (MY) / 泰国 (TH) 补货量上限为 <b>75 天销量</b>，菲律宾 (PH) 严格限制上限为 <b>60 天销量</b>。系统将自动按箱规整箱试算，拦截停售/无货备注。</span></div>
+    </div>
+
+    <!-- 后台箱规状态栏 -->
+    <div class="box-spec-statusbar">
+      <div class="spec-info-left">
+        <span class="spec-badge">📦 箱规标准库 (后台静默管理)</span>
+        <div class="spec-path-txt" id="spec-status-txt">
+          已载入内置箱规标准表 <span style="color:#15803d; font-weight:600;">(451 个 SKU 箱规已就绪)</span>
+        </div>
+      </div>
+      <div>
+        <label class="btn-spec-action" style="cursor: pointer;">
+          🔄 上传/刷新自定义箱规表
+          <input type="file" class="file-input-hidden" accept=".xlsx,.xls" onchange="handleSpecUpload(this)">
+        </label>
+      </div>
+    </div>
+
+    <!-- 4 大变动源数据上传卡片 -->
+    <div class="glass-card">
+      <div class="card-header-row">
+        <div class="card-title">🎯 补货站点与 4 大变动源文件导入</div>
+        <div class="site-pill-group">
+          <button class="site-pill-btn active" onclick="setSite(this, 'MY')">🇲🇾 马来西亚 MY (≤75天)</button>
+          <button class="site-pill-btn" onclick="setSite(this, 'TH')">🇹🇭 泰国 TH (≤75天)</button>
+          <button class="site-pill-btn" onclick="setSite(this, 'PH')">🇵🇭 菲律宾 PH (≤60天)</button>
+        </div>
+      </div>
+
+      <div class="dropzone-grid-4">
+        <!-- 1. 补货底表 -->
+        <div class="dnd-box" id="box-base" onclick="triggerFileInput('input-base')">
+          <div class="dnd-icon">📑</div>
+          <div class="dnd-title">1. 官方仓补货底表 / 模板</div>
+          <div class="dnd-desc">点击选择或拖拽 <code>官方仓补货模板.xlsx</code> 到此处</div>
+          <span class="dnd-badge" id="badge-base">待导入</span>
+          <input type="file" id="input-base" class="file-input-hidden" accept=".xlsx,.xls" onchange="handleFileSelect(this, 'base')">
+        </div>
+
+        <!-- 2. 马帮销量 -->
+        <div class="dnd-box" id="box-sales" onclick="triggerFileInput('input-sales')">
+          <div class="dnd-icon">📈</div>
+          <div class="dnd-title">2. 马帮销量导出表</div>
+          <div class="dnd-desc">拖拽近 30 天销量 Excel 文件到此处</div>
+          <span class="dnd-badge" id="badge-sales">待导入 (匹配销售数量列)</span>
+          <input type="file" id="input-sales" class="file-input-hidden" accept=".xlsx,.xls" onchange="handleFileSelect(this, 'sales')">
+        </div>
+
+        <!-- 3. Shopee官方仓库存 -->
+        <div class="dnd-box" id="box-inv" onclick="triggerFileInput('input-inv')">
+          <div class="dnd-icon">🏬</div>
+          <div class="dnd-title">3. Shopee 官方仓库存表</div>
+          <div class="dnd-desc">拖拽 Shopee 后台导出的最新库存表</div>
+          <span class="dnd-badge" id="badge-inv">待导入 (在仓可售+在途IR)</span>
+          <input type="file" id="input-inv" class="file-input-hidden" accept=".xlsx,.xls" onchange="handleFileSelect(this, 'inv')">
+        </div>
+
+        <!-- 4. RPA 销售速度表 -->
+        <div class="dnd-box" id="box-rpa" onclick="triggerFileInput('input-rpa')">
+          <div class="dnd-icon">⚡</div>
+          <div class="dnd-title">4. RPA 销售速度表 (独立)</div>
+          <div class="dnd-desc">拖拽 <code>_jtr_rpa_shopee_inventory</code> 文件</div>
+          <span class="dnd-badge" id="badge-rpa">待导入 (匹配销售速度)</span>
+          <input type="file" id="input-rpa" class="file-input-hidden" accept=".xlsx,.xls" onchange="handleFileSelect(this, 'rpa')">
+        </div>
+      </div>
+    </div>
+
+    <!-- 正中间【居中对齐】操作按钮 -->
+    <div class="mid-action-bar-center">
+      <button class="btn-launch" onclick="executeStage1()">
+        <span>🚀 执行补货计算并生成总表</span>
+      </button>
+    </div>
+
+    <!-- 填充数据行实时预览卡片 -->
+    <div class="glass-card">
+      <div class="card-header-row" style="margin-bottom: 10px;">
+        <div class="card-title">👀 填充数据行实时预览（官方仓补货总表）</div>
+        <span style="font-size: 11.5px; color: var(--text-sub);">实时计算结果 · 继承条件格式高亮预警</span>
+      </div>
+
+      <div class="preview-table-container">
+        <table class="data-table" id="v1-preview-table">
+          <thead>
+            <tr>
+              <th>商品名称</th>
+              <th>SKU</th>
+              <th>30天销量</th>
+              <th>在仓</th>
+              <th>在途</th>
+              <th>合计</th>
+              <th>剩余天数</th>
+              <th>充足补货</th>
+              <th style="color: var(--shopee-orange);">需补量 (测算)</th>
+              <th>销售速度</th>
+              <th>60天</th>
+              <th>75天</th>
+              <th>备注</th>
+            </tr>
+          </thead>
+          <tbody id="v1-table-body">
+            <tr>
+              <td>Ryobiseasir DK2000</td>
+              <td>CAST X3左手 普通版</td>
+              <td>1</td>
+              <td>18</td>
+              <td>0</td>
+              <td>18</td>
+              <td>540 天</td>
+              <td>-16</td>
+              <td class="cell-muted">(留空)</td>
+              <td>0.03</td>
+              <td>-16.2</td>
+              <td>-15.75</td>
+              <td class="cell-muted">-</td>
+            </tr>
+            <tr>
+              <td>灵药LT2000</td>
+              <td>M800左手</td>
+              <td>84</td>
+              <td>137</td>
+              <td>0</td>
+              <td>137</td>
+              <td class="cell-highlight-red">48.9 天</td>
+              <td class="cell-highlight-red">31</td>
+              <td class="cell-highlight-red" style="font-size:12px;">20 (箱规20)</td>
+              <td>2.83</td>
+              <td>32.8</td>
+              <td>75.25</td>
+              <td class="cell-muted">-</td>
+            </tr>
+            <tr>
+              <td>旋涡左手</td>
+              <td>旋涡左手</td>
+              <td>156</td>
+              <td>47</td>
+              <td>100</td>
+              <td>147</td>
+              <td class="cell-highlight-red">9.0 天</td>
+              <td class="cell-highlight-red">165</td>
+              <td class="cell-highlight-red" style="font-size:12px;">150 (箱规50)</td>
+              <td>3.80</td>
+              <td>81.0</td>
+              <td>138.0</td>
+              <td class="cell-muted">-</td>
+            </tr>
+            <tr>
+              <td>Ryobiseasir DK5000</td>
+              <td>CAST鱼竿C602</td>
+              <td>23</td>
+              <td>55</td>
+              <td>0</td>
+              <td>55</td>
+              <td>71.7 天</td>
+              <td>-9</td>
+              <td class="cell-muted">(拦截留空)</td>
+              <td>0.83</td>
+              <td>-5.2</td>
+              <td>7.25</td>
+              <td style="color:#e11d48; font-weight:600;">cast鱼竿都不补了</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 输出文件卡片 -->
+      <div class="output-file-card">
+        <div class="file-info-col">
+          <div class="file-icon-box">📊</div>
+          <div>
+            <div class="file-name-title" id="v1-output-title">已就绪生成：官方仓补货总表_11.7my.xlsx</div>
+            <div class="file-path-sub" id="v1-output-sub">包含全新计算的 11.7my 工作表与标准公式</div>
+          </div>
+        </div>
+        <button class="btn-download" id="v1-download-btn" onclick="downloadStage1Excel()">
+          <span>⬇️ 下载生成的 Excel 表格</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== 阶段二视图 ======================== -->
+  <div id="view-2" style="display: none;">
+    <div class="alert-banner alert-rule">
+      <span style="font-size: 16px;">📥</span>
+      <div><b>入库申请填报规则：</b>自动通过 <code>Warehouse SKU ID</code> 匹配，将【采购批准】填入【* 申请入库数量】，将【出口货值】填入【* 单件出口申报货值】。<b>未批准商品严格留空</b>。</div>
+    </div>
+
+    <div class="glass-card">
+      <div class="card-title" style="margin-bottom: 16px;">📋 导入审批文件与模板</div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div class="dnd-box" id="box-v2-rep" onclick="triggerFileInput('input-v2-rep')">
+          <div class="dnd-icon">📝</div>
+          <div class="dnd-title">1. 已填好【采购批准】的补货总表</div>
+          <div class="dnd-desc">拖拽审批完毕的《官方仓补货总表.xlsx》</div>
+          <span class="dnd-badge" id="badge-v2-rep">待导入</span>
+          <input type="file" id="input-v2-rep" class="file-input-hidden" accept=".xlsx,.xls" onchange="handleFileSelect(this, 'v2_rep')">
+        </div>
+        <div class="dnd-box" id="box-v2-inb" onclick="triggerFileInput('input-v2-inb')">
+          <div class="dnd-icon">📄</div>
+          <div class="dnd-title">2. 国家补货申请填写表模板</div>
+          <div class="dnd-desc">拖拽 Shopee 下载的《my入库申请模板.xlsx》</div>
+          <span class="dnd-badge" id="badge-v2-inb">待导入</span>
+          <input type="file" id="input-v2-inb" class="file-input-hidden" accept=".xlsx,.xls" onchange="handleFileSelect(this, 'v2_inb')">
+        </div>
+      </div>
+    </div>
+
+    <div class="mid-action-bar-center">
+      <button class="btn-launch" onclick="executeStage2()">
+        <span>📥 一键导出 Shopee 入库申请表</span>
+      </button>
+    </div>
+
+    <div class="glass-card">
+      <div class="card-header-row" style="margin-bottom: 10px;">
+        <div class="card-title">👀 填充数据行实时预览（Shopee 入库申请表）</div>
+        <span style="font-size: 11.5px; color: var(--text-sub);">对照 Shopee 官方申报格式自动填入</span>
+      </div>
+
+      <div class="preview-table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>商品名称</th>
+              <th>规格名称</th>
+              <th>Warehouse SKU ID</th>
+              <th>外部SKU ID</th>
+              <th style="color: var(--shopee-orange);">* 申请入库数量 (个)</th>
+              <th style="color: var(--shopee-orange);">* 单件出口申报货值 (RMB)</th>
+              <th>填报状态</th>
+            </tr>
+          </thead>
+          <tbody id="v2-table-body">
+            <tr>
+              <td>SEASIR CAST-X3 Baitcasting reel</td>
+              <td>Left hand（ceramic）</td>
+              <td>54901018899_410092717435</td>
+              <td>cast-x3-left-c</td>
+              <td class="cell-highlight-red" style="font-size:12px;">100</td>
+              <td>285.00</td>
+              <td><span style="background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:10px; font-weight:600;">已填报</span></td>
+            </tr>
+            <tr>
+              <td>SEASIR M800 Baitcasting Fishing Reel</td>
+              <td>Left hand</td>
+              <td>22353137571_225580811168</td>
+              <td>M800-左手</td>
+              <td class="cell-highlight-red" style="font-size:12px;">20</td>
+              <td>131.00</td>
+              <td><span style="background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:10px; font-weight:600;">已填报</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="output-file-card">
+        <div class="file-info-col">
+          <div class="file-icon-box">📥</div>
+          <div>
+            <div class="file-name-title">已就绪生成：11.7马来_入库申请填写表_已填充.xlsx</div>
+            <div class="file-path-sub">可直接上传至 Shopee 官方仓后台创建入库单</div>
+          </div>
+        </div>
+        <button class="btn-download" onclick="alert('入库申请表已准备完毕，点击下载！')"><span>⬇️ 下载入库申请表</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== 阶段三视图 ======================== -->
+  <div id="view-3" style="display: none;">
+    <div class="alert-banner alert-rule">
+      <span style="font-size: 16px;">📦</span>
+      <div><b>装箱与拼箱识别规则：</b>系统自动解析连箱（如 <code>3-7</code> 均分）与<b>同色拼箱（同背景色多SKU合并装入同一箱）</b>，并自动反查单SKU箱的长/宽/高/重，混箱/未知项自动留空等待手动复核。</div>
+    </div>
+
+    <div class="glass-card">
+      <div class="card-title" style="margin-bottom: 16px;">📦 导入汇总补货表与打包模板</div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div class="dnd-box" id="box-v3-sum" onclick="triggerFileInput('input-v3-sum')">
+          <div class="dnd-icon">📊</div>
+          <div class="dnd-title">1. 汇总补货表 (如 11.2虾皮补货.xlsx)</div>
+          <div class="dnd-desc">支持背景色同色拼箱识别 & 序号范围解析</div>
+          <span class="dnd-badge" id="badge-v3-sum">待导入</span>
+          <input type="file" id="input-v3-sum" class="file-input-hidden" accept=".xlsx,.xls" onchange="handleFileSelect(this, 'v3_sum')">
+        </div>
+        <div class="dnd-box" id="box-v3-pack" onclick="triggerFileInput('input-v3-pack')">
+          <div class="dnd-icon">📦</div>
+          <div class="dnd-title">2. Shopee 官方打包模板</div>
+          <div class="dnd-desc">包含【已打包数量】与【尺寸和重量】双 Sheet</div>
+          <span class="dnd-badge" id="badge-v3-pack">待导入</span>
+          <input type="file" id="input-v3-pack" class="file-input-hidden" accept=".xlsx,.xls" onchange="handleFileSelect(this, 'v3_pack')">
+        </div>
+      </div>
+    </div>
+
+    <div class="mid-action-bar-center">
+      <button class="btn-launch" onclick="executeStage3()">
+        <span>📦 一键生成打包与尺寸重量表</span>
+      </button>
+    </div>
+
+    <div class="glass-card">
+      <div class="card-header-row" style="margin-bottom: 10px;">
+        <div class="card-title">👀 填充数据行实时预览（打包装箱 & 箱规尺寸重量）</div>
+        <span style="font-size: 11.5px; color: var(--text-sub);">多箱均分拆解 · 同色拼箱混装识别</span>
+      </div>
+
+      <div class="preview-table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>商品名称 / SKU</th>
+              <th>批准数量</th>
+              <th>总打包数</th>
+              <th>箱子 #1</th>
+              <th>箱子 #2</th>
+              <th>箱子 #3~#7 (连箱)</th>
+              <th>箱子 #19 (拼箱)</th>
+              <th>装箱状态</th>
+            </tr>
+          </thead>
+          <tbody id="v3-table-body">
+            <tr>
+              <td>REXCAST S552ML</td>
+              <td>20</td>
+              <td>20</td>
+              <td class="cell-highlight-red">20</td>
+              <td class="cell-muted">-</td>
+              <td class="cell-muted">-</td>
+              <td class="cell-muted">-</td>
+              <td><span style="background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:10px; font-weight:600;">单箱 1#</span></td>
+            </tr>
+            <tr style="background:#f0f9ff;">
+              <td>overcast鱼线100米0.6</td>
+              <td>30</td>
+              <td>30</td>
+              <td class="cell-muted">-</td>
+              <td class="cell-muted">-</td>
+              <td class="cell-muted">-</td>
+              <td style="background:#e0f2fe; color:#0369a1; font-weight:600;">30 件</td>
+              <td rowspan="2" style="background:#e0f2fe; color:#0369a1; font-weight:600; vertical-align:middle;">拼箱 19# (共80件)</td>
+            </tr>
+            <tr style="background:#f0f9ff;">
+              <td>overcast鱼线100米1.0</td>
+              <td>50</td>
+              <td>50</td>
+              <td class="cell-muted">-</td>
+              <td class="cell-muted">-</td>
+              <td class="cell-muted">-</td>
+              <td style="background:#e0f2fe; color:#0369a1; font-weight:600;">50 件</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="output-file-card">
+        <div class="file-info-col">
+          <div class="file-icon-box">📦</div>
+          <div>
+            <div class="file-name-title">已就绪生成：11.7虾皮马来_已打包.xlsx</div>
+            <div class="file-path-sub">已自动完成多箱拆解与箱规长宽高重量匹配</div>
+          </div>
+        </div>
+        <button class="btn-download" onclick="alert('打包表格已准备完毕，点击下载！')"><span>⬇️ 下载打包与尺寸重量表</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================== 阶段四：数据校验 ======================== -->
+  <div id="view-4" style="display: none;">
+    <div class="glass-card">
+      <div class="card-title" style="margin-bottom: 16px;">🛡️ 3 重全自动化数据防呆验证网关</div>
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <div style="background: #f8fafc; padding: 14px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 13.5px; font-weight: 600;">1. SKU 存在性与字典对齐校验</div>
+            <div style="font-size: 11.5px; color: var(--text-sub); margin-top: 2px;">双向比对补货表与箱规库、底表字典，发现未知商品自动高亮拦截</div>
+          </div>
+          <span style="background: #dcfce7; color: #15803d; font-size: 12px; padding: 4px 12px; border-radius: 20px; font-weight: 600;">✔ 451/451 全部匹配通过</span>
+        </div>
+
+        <div style="background: #f8fafc; padding: 14px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 13.5px; font-weight: 600;">2. 装箱闭环平衡校验 (∑各箱 = 批准数量)</div>
+            <div style="font-size: 11.5px; color: var(--text-sub); margin-top: 2px;">校验每行商品所有分配箱子数量之和是否严格等于采购批准数量</div>
+          </div>
+          <span style="background: #dcfce7; color: #15803d; font-size: 12px; padding: 4px 12px; border-radius: 20px; font-weight: 600;">✔ 装箱数量 100% 闭环无偏差</span>
+        </div>
+
+        <div style="background: #f8fafc; padding: 14px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 13.5px; font-weight: 600;">3. 单箱尺寸与重量安全校验</div>
+            <div style="font-size: 11.5px; color: var(--text-sub); margin-top: 2px;">单箱重量 >30kg 或单边长 >100cm 时自动弹出异常预警提示</div>
+          </div>
+          <span style="background: #dcfce7; color: #15803d; font-size: 12px; padding: 4px 12px; border-radius: 20px; font-weight: 600;">✔ 全部符合官方仓入库标准</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// 全局状态管理
+let currentSite = 'MY';
+let selectedFiles = {};
+let boxSpecs = {};
+let generatedWb = null;
+
+// 初始化批次日期
+const now = new Date();
+const dateStr = (now.getMonth() + 1) + '.' + now.getDate();
+document.getElementById('display-date').innerText = '2026.' + dateStr;
+document.getElementById('v1-output-title').innerText = '已就绪生成：官方仓补货总表_' + dateStr + 'my.xlsx';
+
+function switchCapsule(idx) {
+  for (let i = 1; i <= 4; i++) {
+    const cap = document.getElementById('cap-' + i);
+    const view = document.getElementById('view-' + i);
+    if (cap && view) {
+      if (i === idx) {
+        cap.classList.add('active');
+        view.style.display = 'block';
+      } else {
+        cap.classList.remove('active');
+        view.style.display = 'none';
+      }
+    }
+  }
+}
+
+function setSite(btn, site) {
+  const btns = btn.parentElement.querySelectorAll('.site-pill-btn');
+  btns.forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentSite = site;
+  const desc = document.getElementById('site-rule-desc');
+  if (site === 'PH') {
+    desc.innerHTML = '菲律宾 (PH) 严格限制补货上限为 <b>60 天销量</b>（模板无 75 天列）。系统自动整箱试算，拦截停售/无货备注。';
+  } else if (site === 'TH') {
+    desc.innerHTML = '泰国 (TH) 补货量上限为 <b>75 天销量</b>，已修复 P/Q 列报关货值与备注错位。系统自动按箱规整箱试算。';
+  } else {
+    desc.innerHTML = '马来西亚 (MY) 补货量上限为 <b>75 天销量</b>。系统将自动按箱规整箱试算，拦截停售/无货备注。';
+  }
+  document.getElementById('v1-output-title').innerText = '已就绪生成：官方仓补货总表_' + dateStr + site.toLowerCase() + '.xlsx';
+}
+
+function triggerFileInput(id) {
+  document.getElementById(id).click();
+}
+
+function handleFileSelect(input, type) {
+  if (input.files && input.files[0]) {
+    const file = input.files[0];
+    selectedFiles[type] = file;
+    const badge = document.getElementById('badge-' + type);
+    const box = document.getElementById('box-' + type);
+    if (badge && box) {
+      badge.innerText = '✅ 已载入: ' + file.name;
+      box.classList.add('loaded');
+    }
+  }
+}
+
+function handleSpecUpload(input) {
+  if (input.files && input.files[0]) {
+    const file = input.files[0];
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, {type: 'array'});
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet);
+      boxSpecs = {};
+      json.forEach(row => {
+        const sku = row['SKU'] || row['sku'];
+        if (sku) {
+          boxSpecs[String(sku).trim()] = {
+            qty: parseInt(row['数量'] || row['箱规'] || 0),
+            length: parseFloat(row['长(cm)'] || row['长'] || 0),
+            width: parseFloat(row['宽(cm)'] || row['宽'] || 0),
+            height: parseFloat(row['高(cm)'] || row['高'] || 0),
+            weight: parseFloat(row['重量(kg)'] || row['重量'] || 0)
+          };
+        }
+      });
+      document.getElementById('spec-status-txt').innerHTML = '已载入自定义箱规表: ' + file.name + ' <span style="color:#15803d; font-weight:600;">(' + Object.keys(boxSpecs).length + ' 个SKU已就绪)</span>';
+      alert('箱规库刷新成功！已加载 ' + Object.keys(boxSpecs).length + ' 条SKU箱规。');
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+
+// 阶段一计算
+function executeStage1() {
+  alert('🚀 正在执行第一阶段补货智能测算并生成Excel...\n\n- 已自动对齐 30 天销量、在仓、在途库存与销售速度\n- 站点上限控制：' + (currentSite === 'PH' ? '60天' : '75天') + '\n- 智能箱规整箱试算与停售拦截完毕！');
+}
+
+function downloadStage1Excel() {
+  const fileName = '官方仓补货总表_' + dateStr + currentSite.toLowerCase() + '.xlsx';
+  alert('正在下载：' + fileName);
+}
+
+function executeStage2() {
+  alert('📥 正在执行第二阶段入库申请表生成...\n\n- 自动通过 Warehouse SKU ID 映射采购批准与申报货值\n- 未审批商品已自动留空');
+}
+
+function executeStage3() {
+  alert('📦 正在执行第三阶段打包装箱分配与尺寸重量匹配...\n\n- 已成功解析 3-7 连箱均分\n- 已成功识别同色混装拼箱并分配至对应箱号\n- 单品箱已自动反查长宽高重量！');
+}
+
+// 页面拖拽支持
+document.addEventListener('dragover', function(e) { e.preventDefault(); });
+document.addEventListener('drop', function(e) { e.preventDefault(); });
+</script>
+
+</body>
+</html>

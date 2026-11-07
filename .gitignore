@@ -1,0 +1,12 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary / test Excel files
+test_*.xlsx
+~$*.xlsx
+
+# OS generated files
+.DS_Store
+Thumbs.db
