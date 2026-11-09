@@ -1,0 +1,1970 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shopee 官方仓全流程智能补货工作台</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+  // 离线兜底：CDN 不可用时加载同目录的本地 SheetJS
+  if (typeof XLSX === 'undefined') {
+    document.write('<script src="xlsx.full.min.js"><\/script>');
+  }
+</script>
+<style>
+  :root {
+    --shopee-orange: #ee4d2d;
+    --shopee-orange-gradient: linear-gradient(135deg, #ff5722 0%, #ee4d2d 100%);
+    --shopee-orange-hover: linear-gradient(135deg, #ff6b3d 0%, #d73211 100%);
+    --bg-canvas: #f5f7fa;
+    --card-bg: #ffffff;
+    --text-main: #1e293b;
+    --text-sub: #64748b;
+    --shadow-soft: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.03);
+    --shadow-hover: 0 20px 30px -10px rgba(238, 77, 45, 0.25), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.04);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-canvas);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--text-main);
+    padding: 24px;
+    display: flex;
+    justify-content: center;
+  }
+  .app-container { width: 100%; max-width: 1180px; }
+
+  /* 顶部 */
+  .top-navbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; gap: 12px; }
+  .brand-section { display: flex; align-items: center; gap: 12px; }
+  .brand-logo {
+    width: 40px; height: 40px; background: var(--shopee-orange-gradient); border-radius: 12px;
+    display: flex; align-items: center; justify-content: center; color: #fff;
+    font-weight: 800; font-size: 20px; box-shadow: 0 4px 12px rgba(238, 77, 45, 0.35);
+  }
+  .brand-text h1 { font-size: 17px; font-weight: 700; }
+  .brand-text p { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
+  .top-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .batch-badge {
+    font-size: 12px; color: var(--text-sub); background: #fff; padding: 7px 14px;
+    border-radius: 20px; box-shadow: var(--shadow-card); font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .batch-badge input {
+    width: 62px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 2px 6px;
+    font-size: 12px; font-family: inherit; color: var(--text-main); text-align: center;
+  }
+  .mode-badge {
+    font-size: 11.5px; padding: 6px 12px; border-radius: 20px; font-weight: 600;
+    background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; white-space: nowrap;
+  }
+  .mode-badge.backend { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+  .mode-badge.browser { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+  .mode-badge.probing { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+
+  /* 步骤条 */
+  .capsule-stepper { display: flex; background: #fff; padding: 6px; border-radius: 50px; box-shadow: var(--shadow-card); gap: 6px; margin-bottom: 18px; }
+  .step-capsule {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 11px 12px; border-radius: 40px; font-size: 13px; font-weight: 500;
+    color: var(--text-sub); cursor: pointer; transition: all .25s cubic-bezier(.4,0,.2,1);
+  }
+  .step-capsule:hover { background: #f8fafc; color: var(--text-main); }
+  .step-capsule.active { background: var(--shopee-orange-gradient); color: #fff; font-weight: 600; box-shadow: 0 4px 14px rgba(238,77,45,.35); }
+  .step-num { width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,.06); display: flex; align-items: center; justify-content: center; font-size: 11px; }
+  .step-capsule.active .step-num { background: rgba(255,255,255,.25); color: #fff; }
+
+  .alert-banner { padding: 12px 16px; border-radius: 12px; font-size: 12.5px; margin-bottom: 14px; display: flex; align-items: flex-start; gap: 10px; line-height: 1.6; }
+  .alert-rule { background: #fff7ed; border-left: 4px solid #f97316; color: #9a3412; }
+  .alert-warn { background: #fef2f2; border-left: 4px solid #ef4444; color: #991b1b; }
+  .alert-ok { background: #ecfdf5; border-left: 4px solid #10b981; color: #065f46; }
+
+  /* 箱规状态栏 */
+  .box-spec-statusbar {
+    background: #fff; border: 1px solid #e2e8f0; border-left: 4px solid #f59e0b;
+    border-radius: 12px; padding: 11px 18px; margin-bottom: 14px;
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    box-shadow: 0 2px 6px rgba(0,0,0,.02); flex-wrap: wrap;
+  }
+  .spec-info-left { display: flex; align-items: center; gap: 10px; font-size: 12px; flex-wrap: wrap; }
+  .spec-badge { background: #fef3c7; color: #92400e; font-weight: 600; padding: 3px 8px; border-radius: 6px; font-size: 11px; white-space: nowrap; }
+  .spec-path-txt { color: #475569; }
+  .spec-path-txt b { color: #15803d; }
+  .spec-path-txt .muted { color: #b91c1c; }
+  .btn-spec-action {
+    background: #f8fafc; color: #334155; border: 1px solid #cbd5e1; padding: 6px 14px;
+    border-radius: 16px; font-size: 11.5px; cursor: pointer; transition: all .2s; white-space: nowrap;
+  }
+  .btn-spec-action:hover { background: #e2e8f0; }
+
+  .glass-card { background: var(--card-bg); border-radius: 16px; padding: 22px; box-shadow: var(--shadow-soft); margin-bottom: 16px; }
+  .card-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }
+  .card-title { font-size: 14.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .card-sub { font-size: 11.5px; color: var(--text-sub); }
+
+  .site-pill-group { display: flex; background: #f1f5f9; padding: 4px; border-radius: 10px; gap: 4px; }
+  .site-pill-btn {
+    padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; color: var(--text-sub);
+    cursor: pointer; border: none; background: transparent; transition: all .2s; font-family: inherit;
+  }
+  .site-pill-btn.active { background: #fff; color: var(--shopee-orange); font-weight: 600; box-shadow: 0 2px 6px rgba(0,0,0,.06); }
+
+  /* 拖拽区 */
+  .dropzone-grid-4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .dnd-box {
+    background: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 14px; padding: 20px 16px;
+    text-align: center; cursor: pointer; transition: all .25s cubic-bezier(.4,0,.2,1); position: relative;
+  }
+  .dnd-box:hover, .dnd-box.dragover { border-color: var(--shopee-orange); background: #fffaf8; transform: translateY(-2px); box-shadow: 0 6px 16px rgba(238,77,45,.08); }
+  .dnd-box.loaded { border-color: #10b981; background: #f0fdf4; }
+  .dnd-icon { font-size: 24px; margin-bottom: 6px; }
+  .dnd-title { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  .dnd-desc { font-size: 11.5px; color: var(--text-sub); }
+  .dnd-badge { display: inline-block; font-size: 10.5px; padding: 2px 8px; border-radius: 20px; background: #e2e8f0; color: #475569; margin-top: 8px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dnd-box.loaded .dnd-badge { background: #dcfce7; color: #15803d; font-weight: 600; }
+  .file-input-hidden { display: none; }
+
+  .mid-action-bar-center { display: flex; justify-content: center; align-items: center; margin: 18px 0 20px; }
+  .btn-launch {
+    background: var(--shopee-orange-gradient); color: #fff; border: none; padding: 13px 40px;
+    border-radius: 30px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+    box-shadow: 0 8px 20px -4px rgba(238,77,45,.45); transition: all .3s cubic-bezier(.34,1.56,.64,1);
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .btn-launch:hover:not(:disabled) { transform: translateY(-2px) scale(1.02); box-shadow: var(--shadow-hover); background: var(--shopee-orange-hover); }
+  .btn-launch:disabled { opacity: .6; cursor: not-allowed; box-shadow: none; }
+
+  /* 表格 */
+  .preview-table-container { overflow: auto; border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; margin-top: 10px; max-height: 420px; }
+  .data-table { width: 100%; border-collapse: collapse; font-size: 11.5px; text-align: center; }
+  .data-table th { background: #f1f5f9; color: #334155; font-weight: 600; padding: 9px 8px; border-bottom: 1px solid #cbd5e1; white-space: nowrap; position: sticky; top: 0; z-index: 2; }
+  .data-table td { padding: 7px 8px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; }
+  .data-table tbody tr:hover td { background: #fafcff; }
+  .cell-red { background: #fee2e2 !important; color: #991b1b !important; font-weight: 600; }
+  .cell-blue { background: #e0f2fe !important; color: #0369a1 !important; font-weight: 600; }
+  .cell-muted { color: #94a3b8; font-style: italic; }
+  .cell-left { text-align: left; }
+  .status-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+  .st-filled { background: #dcfce7; color: #15803d; }
+  .st-intercepted { background: #fee2e2; color: #b91c1c; }
+  .st-no_boxspec { background: #fef3c7; color: #92400e; }
+  .st-no_demand { background: #f1f5f9; color: #64748b; }
+  .st-ok { background: #dcfce7; color: #15803d; }
+  .st-mixed { background: #e0f2fe; color: #0369a1; }
+  .st-unmatched { background: #fee2e2; color: #b91c1c; }
+  .reason-txt { color: #64748b; font-size: 10.5px; max-width: 260px; white-space: normal; text-align: left; }
+
+  .stats-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .stat-chip { font-size: 11.5px; padding: 4px 12px; border-radius: 20px; background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; }
+  .stat-chip b { color: var(--text-main); }
+  .stat-chip.ok { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
+  .stat-chip.warn { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+  .stat-chip.bad { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+
+  /* 输出文件卡 */
+  .output-file-card {
+    background: #fff; border: 1px solid #e2e8f0; border-left: 5px solid var(--shopee-orange);
+    border-radius: 12px; padding: 14px 18px; display: flex; justify-content: space-between;
+    align-items: center; margin-top: 16px; box-shadow: 0 4px 12px rgba(0,0,0,.03); gap: 12px; flex-wrap: wrap;
+  }
+  .output-file-card.pending { border-left-color: #cbd5e1; opacity: .75; }
+  .file-info-col { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .file-icon-box { width: 40px; height: 40px; background: #fff1ee; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 19px; flex-shrink: 0; }
+  .file-name-title { font-size: 13.5px; font-weight: 600; word-break: break-all; }
+  .file-path-sub { font-size: 11px; color: var(--text-sub); margin-top: 2px; word-break: break-all; }
+  .btn-download {
+    background: var(--shopee-orange-gradient); color: #fff; border: none; padding: 9px 20px;
+    border-radius: 20px; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all .2s; font-family: inherit; white-space: nowrap;
+  }
+  .btn-download:hover:not(:disabled) { box-shadow: 0 4px 12px rgba(238,77,45,.35); }
+  .btn-download:disabled { background: #cbd5e1; cursor: not-allowed; }
+
+  /* 校验中心 */
+  .check-item { background: #f8fafc; padding: 14px; border-radius: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 12px; }
+  .check-item .title { font-size: 13.5px; font-weight: 600; }
+  .check-item .desc { font-size: 11.5px; color: var(--text-sub); margin-top: 2px; }
+  .check-result { font-size: 12px; padding: 4px 12px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+  .check-pass { background: #dcfce7; color: #15803d; }
+  .check-fail { background: #fee2e2; color: #b91c1c; }
+  .check-pending { background: #f1f5f9; color: #64748b; }
+  .check-detail { font-size: 11px; color: #b91c1c; margin-top: 8px; line-height: 1.7; word-break: break-all; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%) translateY(20px);
+    background: rgba(30,41,59,.95); color: #fff; padding: 11px 20px; border-radius: 12px;
+    font-size: 12.5px; opacity: 0; pointer-events: none; transition: all .28s; z-index: 999;
+    max-width: 80vw; text-align: center; line-height: 1.6;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.err { background: rgba(185,28,28,.96); }
+  #toast.ok { background: rgba(4,120,87,.96); }
+
+  .empty-hint { padding: 26px; text-align: center; color: #94a3b8; font-size: 12.5px; }
+  .site-tag { font-size: 11px; color: #94a3b8; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="app-container">
+
+  <div class="top-navbar">
+    <div class="brand-section">
+      <div class="brand-logo">S</div>
+      <div class="brand-text">
+        <h1>Shopee 官方仓全流程智能补货工作台</h1>
+        <p>数据对齐 · 独立箱规字典 · 多站点规则 · 拼箱装箱闭环 · 三重防呆校验</p>
+      </div>
+    </div>
+    <div class="top-right">
+      <span class="mode-badge probing" id="mode-badge">正在探测计算引擎…</span>
+      <div class="batch-badge">📅 批次日期：<input id="date-input" value="" title="形如 11.7，用于生成文件名与工作表名"></div>
+    </div>
+  </div>
+
+  <div class="capsule-stepper">
+    <div class="step-capsule active" id="cap-1" onclick="switchCapsule(1)"><span class="step-num">1</span><span>阶段一：生成补货总表</span></div>
+    <div class="step-capsule" id="cap-2" onclick="switchCapsule(2)"><span class="step-num">2</span><span>阶段二：生成入库申请表</span></div>
+    <div class="step-capsule" id="cap-3" onclick="switchCapsule(3)"><span class="step-num">3</span><span>阶段三：装箱打包与箱规</span></div>
+    <div class="step-capsule" id="cap-4" onclick="switchCapsule(4)"><span class="step-num">✔</span><span>数据校验中心</span></div>
+  </div>
+
+  <!-- ============================ 阶段一 ============================ -->
+  <div id="view-1">
+    <div class="alert-banner alert-rule">
+      <span style="font-size:16px;">📌</span>
+      <div><b>站点测算规则：</b><span id="site-rule-desc">马来 (MY) / 泰国 (TH) 补货上限 75 天销量，菲律宾 (PH) 上限 60 天销量。按箱规整箱试算，命中拦截词的备注整行留空。</span></div>
+    </div>
+
+    <div class="box-spec-statusbar">
+      <div class="spec-info-left">
+        <span class="spec-badge">📦 箱规标准库</span>
+        <div class="spec-path-txt" id="boxspec-meta">正在读取…</div>
+      </div>
+      <div>
+        <label class="btn-spec-action">
+          🔄 上传/替换箱规表
+          <input type="file" class="file-input-hidden" accept=".xlsx,.xls" id="boxspec-input" onchange="handleBoxSpecUpload(this)">
+        </label>
+      </div>
+    </div>
+
+    <div class="glass-card">
+      <div class="card-header-row">
+        <div class="card-title">🎯 补货站点与 4 大变动源文件导入</div>
+        <div class="site-pill-group">
+          <button class="site-pill-btn active" data-site="my" onclick="setSite(this,'my')">🇲🇾 马来西亚 (≤75天)</button>
+          <button class="site-pill-btn" data-site="th" onclick="setSite(this,'th')">🇹🇭 泰国 (≤75天)</button>
+          <button class="site-pill-btn" data-site="ph" onclick="setSite(this,'ph')">🇵🇭 菲律宾 (≤60天)</button>
+        </div>
+      </div>
+
+      <div class="dropzone-grid-4">
+        <div class="dnd-box" data-key="base" onclick="pickFile('base')">
+          <div class="dnd-icon">📑</div>
+          <div class="dnd-title">1. 官方仓补货底表 / 模板</div>
+          <div class="dnd-desc">点击选择或拖入 <code>官方仓补货模板.xlsx</code></div>
+          <span class="dnd-badge" id="badge-base">待导入</span>
+        </div>
+        <div class="dnd-box" data-key="sales" onclick="pickFile('sales')">
+          <div class="dnd-icon">📈</div>
+          <div class="dnd-title">2. 马帮销量导出表</div>
+          <div class="dnd-desc">近 30 天销量，按 <code>SKU</code> 匹配</div>
+          <span class="dnd-badge" id="badge-sales">待导入</span>
+        </div>
+        <div class="dnd-box" data-key="inv" onclick="pickFile('inv')">
+          <div class="dnd-icon">🏬</div>
+          <div class="dnd-title">3. Shopee 官方仓库存表</div>
+          <div class="dnd-desc">按 <code>仓库SKU ID</code> 匹配在仓与在途</div>
+          <span class="dnd-badge" id="badge-inv">待导入</span>
+        </div>
+        <div class="dnd-box" data-key="rpa" onclick="pickFile('rpa')">
+          <div class="dnd-icon">⚡</div>
+          <div class="dnd-title">4. RPA 销售速度表</div>
+          <div class="dnd-desc">按 <code>仓库SKU</code> 匹配销售速度</div>
+          <span class="dnd-badge" id="badge-rpa">待导入</span>
+        </div>
+      </div>
+      <input type="file" class="file-input-hidden" id="file-base" accept=".xlsx,.xls">
+      <input type="file" class="file-input-hidden" id="file-sales" accept=".xlsx,.xls">
+      <input type="file" class="file-input-hidden" id="file-inv" accept=".xlsx,.xls">
+      <input type="file" class="file-input-hidden" id="file-rpa" accept=".xlsx,.xls">
+    </div>
+
+    <div class="mid-action-bar-center">
+      <button class="btn-launch" id="btn-stage1" onclick="runStage1()"><span>🚀 执行补货计算并生成总表</span></button>
+    </div>
+
+    <div class="glass-card">
+      <div class="card-header-row" style="margin-bottom:8px;">
+        <div class="card-title">👀 填充数据行实时预览（官方仓补货总表）</div>
+        <span class="card-sub" id="s1-caption">尚未执行 · 结果来自真实引擎计算</span>
+      </div>
+      <div class="preview-table-container">
+        <table class="data-table" id="s1-table">
+          <thead>
+            <tr>
+              <th>商品名称</th><th>SKU</th><th>30天销量</th><th>在仓</th><th>在途</th><th>合计</th>
+              <th>剩余天数</th><th>充足补货</th><th style="color:var(--shopee-orange);">需补量</th>
+              <th>箱规</th><th>销售速度</th><th>60天</th><th>75天</th><th>备注</th><th>测算说明</th>
+            </tr>
+          </thead>
+          <tbody id="s1-body">
+            <tr><td colspan="15" class="empty-hint">上传 4 个文件后点击「执行补货计算」，这里会显示真实测算结果</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="stats-row" id="s1-stats"></div>
+
+      <div class="output-file-card pending" id="s1-output">
+        <div class="file-info-col">
+          <div class="file-icon-box">📊</div>
+          <div>
+            <div class="file-name-title" id="s1-file-title">尚未生成文件</div>
+            <div class="file-path-sub" id="s1-file-sub">执行后在此下载官方仓补货总表</div>
+          </div>
+        </div>
+        <button class="btn-download" id="btn-dl-s1" disabled onclick="downloadStage1()"><span>⬇️ 下载生成的 Excel</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ 阶段二 ============================ -->
+  <div id="view-2" style="display:none;">
+    <div class="alert-banner alert-rule">
+      <span style="font-size:16px;">📥</span>
+      <div><b>填报规则：</b>按 <code>Warehouse SKU ID</code> 匹配，把【采购批准】写入【* 申请入库数量】、【出口货值】写入【* 单件出口申报货值】。未批准商品严格留空。</div>
+    </div>
+    <div class="glass-card">
+      <div class="card-header-row"><div class="card-title">📋 导入审批文件与模板</div></div>
+      <div class="dropzone-grid-4">
+        <div class="dnd-box" data-key="v2rep" onclick="pickFile('v2rep')">
+          <div class="dnd-icon">📝</div>
+          <div class="dnd-title">1. 已填【采购批准】的补货总表</div>
+          <div class="dnd-desc">拖入审批完毕的《官方仓补货总表.xlsx》</div>
+          <span class="dnd-badge" id="badge-v2rep">待导入</span>
+        </div>
+        <div class="dnd-box" data-key="v2inb" onclick="pickFile('v2inb')">
+          <div class="dnd-icon">📄</div>
+          <div class="dnd-title">2. 国家补货申请填写表模板</div>
+          <div class="dnd-desc">拖入 Shopee 后台下载的入库申请模板</div>
+          <span class="dnd-badge" id="badge-v2inb">待导入</span>
+        </div>
+      </div>
+      <input type="file" class="file-input-hidden" id="file-v2rep" accept=".xlsx,.xls">
+      <input type="file" class="file-input-hidden" id="file-v2inb" accept=".xlsx,.xls">
+    </div>
+    <div class="mid-action-bar-center">
+      <button class="btn-launch" id="btn-stage2" onclick="runStage2()"><span>📥 一键导出 Shopee 入库申请表</span></button>
+    </div>
+    <div class="glass-card">
+      <div class="card-header-row" style="margin-bottom:8px;">
+        <div class="card-title">👀 填充数据行实时预览（入库申请表）</div>
+        <span class="card-sub" id="s2-caption">尚未执行</span>
+      </div>
+      <div class="preview-table-container">
+        <table class="data-table">
+          <thead><tr><th>商品名称</th><th>规格名称</th><th>Warehouse SKU ID</th><th>外部SKU ID</th><th style="color:var(--shopee-orange);">* 申请入库数量</th><th style="color:var(--shopee-orange);">* 单件出口申报货值 (RMB)</th></tr></thead>
+          <tbody id="s2-body"><tr><td colspan="6" class="empty-hint">导入两个文件后执行，这里显示真实填报结果</td></tr></tbody>
+        </table>
+      </div>
+      <div class="output-file-card pending" id="s2-output">
+        <div class="file-info-col">
+          <div class="file-icon-box">📥</div>
+          <div>
+            <div class="file-name-title" id="s2-file-title">尚未生成文件</div>
+            <div class="file-path-sub" id="s2-file-sub">执行后在此下载入库申请填写表</div>
+          </div>
+        </div>
+        <button class="btn-download" id="btn-dl-s2" disabled onclick="downloadStage2()"><span>⬇️ 下载入库申请表</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ 阶段三 ============================ -->
+  <div id="view-3" style="display:none;">
+    <div class="alert-banner alert-rule">
+      <span style="font-size:16px;">📦</span>
+      <div><b>装箱规则：</b>解析 <code>3-7</code> 连箱均分与同序号多行拼箱；单品箱自动从箱规库反查长/宽/高/重，拼箱/混箱留空待人工复核。</div>
+    </div>
+    <div class="glass-card">
+      <div class="card-header-row"><div class="card-title">📦 导入汇总补货表与打包模板</div></div>
+      <div class="dropzone-grid-4">
+        <div class="dnd-box" data-key="v3sum" onclick="pickFile('v3sum')">
+          <div class="dnd-icon">📊</div>
+          <div class="dnd-title">1. 汇总补货表</div>
+          <div class="dnd-desc">含商品名称 / 数量 / 序号 / 箱数</div>
+          <span class="dnd-badge" id="badge-v3sum">待导入</span>
+        </div>
+        <div class="dnd-box" data-key="v3pack" onclick="pickFile('v3pack')">
+          <div class="dnd-icon">📦</div>
+          <div class="dnd-title">2. Shopee 官方打包模板</div>
+          <div class="dnd-desc">含【已打包数量】与【尺寸和重量】两个 Sheet</div>
+          <span class="dnd-badge" id="badge-v3pack">待导入</span>
+        </div>
+      </div>
+      <input type="file" class="file-input-hidden" id="file-v3sum" accept=".xlsx,.xls">
+      <input type="file" class="file-input-hidden" id="file-v3pack" accept=".xlsx,.xls">
+    </div>
+    <div class="mid-action-bar-center">
+      <button class="btn-launch" id="btn-stage3" onclick="runStage3()"><span>📦 一键生成打包与尺寸重量表</span></button>
+    </div>
+    <div class="glass-card">
+      <div class="card-header-row" style="margin-bottom:8px;">
+        <div class="card-title">👀 填充数据行实时预览（装箱分配）</div>
+        <span class="card-sub" id="s3-caption">尚未执行</span>
+      </div>
+      <div class="preview-table-container">
+        <table class="data-table">
+          <thead id="s3-head"><tr><th>商品名称 / SKU</th><th>总打包数</th><th>箱数</th><th>装箱状态</th><th>说明</th></tr></thead>
+          <tbody id="s3-body"><tr><td colspan="5" class="empty-hint">导入两个文件后执行，这里显示真实装箱结果</td></tr></tbody>
+        </table>
+      </div>
+      <div class="output-file-card pending" id="s3-output">
+        <div class="file-info-col">
+          <div class="file-icon-box">📦</div>
+          <div>
+            <div class="file-name-title" id="s3-file-title">尚未生成文件</div>
+            <div class="file-path-sub" id="s3-file-sub">执行后在此下载打包与尺寸重量表</div>
+          </div>
+        </div>
+        <button class="btn-download" id="btn-dl-s3" disabled onclick="downloadStage3()"><span>⬇️ 下载打包与尺寸重量表</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ 阶段四 ============================ -->
+  <div id="view-4" style="display:none;">
+    <div class="alert-banner alert-rule">
+      <span style="font-size:16px;">🛡️</span>
+      <div><b>校验说明：</b>三项校验均为真实计算。<b>补充打包表</b>才能校验装箱闭环；尺寸重量校验基于当前箱规库。</div>
+    </div>
+    <div class="glass-card">
+      <div class="card-header-row">
+        <div class="card-title">📎 校验输入（补货总表必填，打包表可选）</div>
+      </div>
+      <div class="dropzone-grid-4">
+        <div class="dnd-box" data-key="v4master" onclick="pickFile('v4master')">
+          <div class="dnd-icon">📊</div>
+          <div class="dnd-title">1. 补货总表</div>
+          <div class="dnd-desc">用于 SKU 字典对齐校验</div>
+          <span class="dnd-badge" id="badge-v4master">待导入</span>
+        </div>
+        <div class="dnd-box" data-key="v4packing" onclick="pickFile('v4packing')">
+          <div class="dnd-icon">📦</div>
+          <div class="dnd-title">2. 已打包表（可选）</div>
+          <div class="dnd-desc">用于装箱闭环平衡校验</div>
+          <span class="dnd-badge" id="badge-v4packing">待导入</span>
+        </div>
+      </div>
+      <input type="file" class="file-input-hidden" id="file-v4master" accept=".xlsx,.xls">
+      <input type="file" class="file-input-hidden" id="file-v4packing" accept=".xlsx,.xls">
+    </div>
+    <div class="mid-action-bar-center">
+      <button class="btn-launch" id="btn-stage4" onclick="runStage4()"><span>🛡️ 执行三重防呆校验</span></button>
+    </div>
+    <div class="glass-card">
+      <div class="card-title" style="margin-bottom:16px;">🛡️ 三项自动防呆验证</div>
+      <div id="v4-results">
+        <div class="check-item"><div><div class="title">1. SKU 存在性与字典对齐校验</div><div class="desc">比对补货总表与箱规库，列出缺失 SKU</div></div><span class="check-result check-pending" id="chk-1">未执行</span></div>
+        <div class="check-item"><div><div class="title">2. 装箱闭环平衡校验（∑各箱 = 批准数量）</div><div class="desc">校验每行各箱数量之和是否等于批准/总打包数量</div></div><span class="check-result check-pending" id="chk-2">未执行</span></div>
+        <div class="check-item"><div><div class="title">3. 单箱尺寸重量安全校验</div><div class="desc">单箱重量 &gt;30kg 或单边 &gt;100cm 预警</div></div><span class="check-result check-pending" id="chk-3">未执行</span></div>
+        <div id="chk-detail"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+<script>
+// ==========================================================================
+// 内置箱规库（由 build_boxspec.py 从「补货箱规表.xlsx」生成，勿手改）
+// 后续更新入口：替换 box spec 文件后重新运行  python build_boxspec.py
+// ==========================================================================
+/* ==BOXSPEC_START== */
+const EMBEDDED_BOXSPEC = {"version":"97d4a3d6","updated":"2026-11-07 17:15","source":"补货箱规表.xlsx","count":482,"specs":{"Bull Max鱼线300米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":"鱼线混箱"},"Bull Max鱼线300米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"Bull Max鱼线300米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"Bull Max鱼线300米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"Bull Max鱼线300米2.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"Bull Max鱼线300米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"Bull Max鱼线300米4.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"Bull Max鱼线300米5.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"Bull Max鱼线300米6.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"cast pro右手":{"qty":40,"length":60.0,"width":30.0,"height":38.0,"weight":12.6,"note":null},"cast pro左手":{"qty":40,"length":60.0,"width":30.0,"height":38.0,"weight":12.6,"note":null},"CAST X3右手 半陶版":{"qty":20,"length":59.5,"width":29.0,"height":15.0,"weight":5.85,"note":null},"CAST X3右手 普通版":{"qty":20,"length":59.5,"width":29.0,"height":15.0,"weight":5.85,"note":null},"CAST X3左手 半陶版":{"qty":20,"length":59.5,"width":29.0,"height":15.0,"weight":5.85,"note":null},"CAST X3左手 普通版":{"qty":20,"length":59.5,"width":29.0,"height":15.0,"weight":5.85,"note":null},"cast-x 右手":{"qty":50,"length":62.0,"width":30.0,"height":38.0,"weight":15.35,"note":null},"cast-x 左手":{"qty":50,"length":62.0,"width":30.0,"height":38.0,"weight":15.35,"note":null},"CAST鱼竿 C702MH":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"CAST鱼竿C602":{"qty":20,"length":99.0,"width":35.0,"height":28.0,"weight":11.4,"note":null},"CAST鱼竿C632":{"qty":20,"length":103.0,"width":35.0,"height":28.0,"weight":12.6,"note":null},"CAST鱼竿C662":{"qty":20,"length":108.0,"width":35.0,"height":28.0,"weight":13.5,"note":null},"CAST鱼竿S602":{"qty":20,"length":99.0,"width":35.0,"height":28.0,"weight":11.4,"note":null},"CAST鱼竿S662":{"qty":20,"length":108.0,"width":35.0,"height":28.0,"weight":13.5,"note":null},"CAST鱼竿S702":{"qty":20,"length":114.0,"width":36.0,"height":29.0,"weight":14.0,"note":null},"CONTRA MAX 3000":{"qty":20,"length":65.0,"width":28.0,"height":19.5,"weight":8.2,"note":null},"CONTRA MAX 4000":{"qty":20,"length":65.0,"width":28.0,"height":19.5,"weight":8.15,"note":null},"CONTRA MAX 5000":{"qty":20,"length":80.0,"width":34.0,"height":23.0,"weight":12.45,"note":null},"CONTRA MAX 6000":{"qty":20,"length":55.0,"width":34.0,"height":33.0,"weight":12.15,"note":null},"CONTRA MAX 8000":{"qty":20,"length":80.0,"width":34.0,"height":23.0,"weight":12.35,"note":null},"CONTRA3000":{"qty":40,"length":67.0,"width":28.0,"height":36.0,"weight":14.65,"note":null},"CONTRA4000":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"CONTRA5000":{"qty":40,"length":73.0,"width":31.0,"height":39.0,"weight":21.2,"note":null},"CONTRA6000":{"qty":40,"length":73.0,"width":31.0,"height":39.0,"weight":21.2,"note":null},"DC Megacuda X 右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"DC Megacuda X 左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"DCast LITE右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"DCast LITE左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"D-CAST右手":{"qty":50,"length":62.0,"width":30.0,"height":38.0,"weight":14.45,"note":null},"D-CAST左手":{"qty":50,"length":62.0,"width":30.0,"height":38.0,"weight":14.45,"note":null},"DC-REXCAST右手":{"qty":40,"length":72.0,"width":25.0,"height":30.0,"weight":11.3,"note":null},"DC-REXCAST左手":{"qty":40,"length":72.0,"width":25.0,"height":30.0,"weight":11.3,"note":null},"DCT水滴轮右手":{"qty":50,"length":null,"width":null,"height":null,"weight":null,"note":null},"DCT水滴轮左手":{"qty":50,"length":null,"width":null,"height":null,"weight":null,"note":null},"DC半陶鼓轮 右手":{"qty":20,"length":72.0,"width":32.0,"height":23.0,"weight":15.0,"note":null},"DC半陶鼓轮 左手":{"qty":20,"length":72.0,"width":32.0,"height":23.0,"weight":15.0,"note":null},"DC红黑鼓轮-右手":{"qty":50,"length":57.5,"width":30.0,"height":38.5,"weight":15.2,"note":null},"DC红黑鼓轮-左手":{"qty":50,"length":57.5,"width":30.0,"height":38.5,"weight":15.2,"note":null},"DC金属鼓轮右手":{"qty":20,"length":65.0,"width":33.0,"height":18.0,"weight":7.9,"note":null},"DC金属鼓轮左手":{"qty":20,"length":65.0,"width":33.0,"height":18.0,"weight":7.9,"note":null},"M800右手":{"qty":50,"length":61.0,"width":29.0,"height":39.0,"weight":15.3,"note":null},"M800左手":{"qty":50,"length":61.0,"width":29.0,"height":39.0,"weight":15.3,"note":null},"Megacuda水滴轮单摇臂右手":{"qty":0,"length":null,"width":null,"height":null,"weight":null,"note":null},"Megacuda水滴轮单摇臂左手":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"OER1500":{"qty":40,"length":65.0,"width":27.0,"height":35.5,"weight":11.85,"note":null},"OER2500":{"qty":40,"length":65.0,"width":27.0,"height":35.5,"weight":11.95,"note":null},"OER3500":{"qty":40,"length":65.0,"width":27.0,"height":35.5,"weight":13.85,"note":null},"OVER CAST-II鱼竿 C662M":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"OVER CAST-II鱼竿 S1002MH":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"OVER CAST-II鱼竿 S662M":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"OVER CAST-II鱼竿 S762M":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"OVER CAST-II鱼竿 S802MH":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"OVER CAST-II鱼竿 S862M":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"OVER CAST-II鱼竿 S902MH":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast 1000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast 2000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast 3000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast 4000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast 5000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast 7000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼竿C662":{"qty":20,"length":108.0,"width":35.0,"height":28.0,"weight":15.4,"note":null},"overcast鱼竿C762":{"qty":20,"length":120.0,"width":35.0,"height":28.0,"weight":17.4,"note":null},"overcast鱼竿C802":{"qty":20,"length":128.0,"width":36.0,"height":29.0,"weight":17.0,"note":null},"overcast鱼竿S662":{"qty":20,"length":108.0,"width":35.0,"height":28.0,"weight":15.4,"note":null},"overcast鱼竿S762":{"qty":20,"length":120.0,"width":35.0,"height":28.0,"weight":17.4,"note":null},"overcast鱼竿S802":{"qty":20,"length":128.0,"width":36.0,"height":29.0,"weight":17.0,"note":null},"overcast鱼竿S862":{"qty":20,"length":138.0,"width":35.0,"height":28.0,"weight":19.2,"note":null},"overcast鱼线100米0.6":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线100米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线100米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线100米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线100米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线100米4.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线150米0.6":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线150米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线150米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线150米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线150米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线150米4.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线300米0.6":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线300米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线300米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线300米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线300米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"overcast鱼线300米4.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"POWER-右手":{"qty":20,"length":59.0,"width":29.0,"height":15.0,"weight":6.0,"note":null},"POWER-左手":{"qty":20,"length":59.0,"width":29.0,"height":15.0,"weight":6.0,"note":null},"PROSPEC 3000MHG":{"qty":20,"length":61.0,"width":28.0,"height":20.0,"weight":6.5,"note":null},"PROSPEC C2000S":{"qty":20,"length":61.0,"width":28.0,"height":20.0,"weight":6.5,"note":null},"PROSPEC C3000SDH":{"qty":20,"length":61.0,"width":28.0,"height":20.0,"weight":6.5,"note":null},"repeater 3000线杯":{"qty":48,"length":27.0,"width":26.0,"height":20.0,"weight":3.4,"note":null},"repeater 4000线杯":{"qty":48,"length":27.0,"width":26.0,"height":20.0,"weight":3.4,"note":null},"Repeater1500s":{"qty":20,"length":65.0,"width":27.0,"height":18.5,"weight":6.7,"note":null},"Repeater2500s":{"qty":20,"length":65.0,"width":27.0,"height":18.5,"weight":6.8,"note":null},"Repeater3000s":{"qty":20,"length":65.0,"width":27.0,"height":18.5,"weight":7.65,"note":null},"Repeater4000s":{"qty":20,"length":65.0,"width":27.0,"height":18.5,"weight":7.75,"note":null},"Repeater双摇臂":{"qty":200,"length":64.0,"width":31.0,"height":40.0,"weight":10.2,"note":null},"repeater鱼竿C602ML":{"qty":20,"length":99.0,"width":33.0,"height":28.0,"weight":11.6,"note":null},"repeater鱼竿C662M":{"qty":20,"length":107.0,"width":28.0,"height":36.0,"weight":13.4,"note":null},"repeater鱼竿C702MH":{"qty":20,"length":112.0,"width":35.0,"height":20.0,"weight":14.9,"note":null},"repeater鱼竿S602ML":{"qty":20,"length":99.0,"width":33.0,"height":28.0,"weight":11.6,"note":null},"repeater鱼竿S662M":{"qty":20,"length":107.0,"width":28.0,"height":36.0,"weight":13.4,"note":null},"repeater鱼竿S702MH":{"qty":20,"length":112.0,"width":35.0,"height":20.0,"weight":14.9,"note":null},"REXCAST C552ML":{"qty":20,"length":88.0,"width":35.0,"height":28.0,"weight":9.7,"note":null},"REXCAST C602ML":{"qty":20,"length":99.0,"width":35.0,"height":25.0,"weight":12.0,"note":null},"REXCAST C662M":{"qty":20,"length":108.0,"width":35.0,"height":28.0,"weight":13.4,"note":null},"REXCAST C662MH":{"qty":20,"length":108.0,"width":35.0,"height":28.0,"weight":13.4,"note":null},"REXCAST S552ML":{"qty":20,"length":88.0,"width":35.0,"height":28.0,"weight":9.7,"note":null},"REXCAST S602ML":{"qty":20,"length":99.0,"width":35.0,"height":25.0,"weight":12.0,"note":null},"REXCAST S692M":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"REXCAST S762M":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"REXCAST S802MH":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"REXCAST右手":{"qty":40,"length":72.0,"width":25.0,"height":30.0,"weight":11.3,"note":null},"REXCAST左手":{"qty":40,"length":72.0,"width":25.0,"height":30.0,"weight":11.3,"note":null},"Ryobiseasir DW1000":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"Ryobiseasir DW2000":{"qty":40,"length":62.0,"width":26.0,"height":35.0,"weight":12.1,"note":null},"Ryobiseasir DW3000":{"qty":40,"length":68.0,"width":29.0,"height":36.0,"weight":13.6,"note":null},"Ryobiseasir DW4000":{"qty":40,"length":68.0,"width":29.0,"height":36.0,"weight":14.2,"note":null},"Ryobiseasir DW5000":{"qty":40,"length":73.0,"width":31.0,"height":37.0,"weight":18.35,"note":null},"Ryobiseasir DW6000":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"Ryobiseasir DW7000":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"SALMINUS 右手":{"qty":40,"length":62.0,"width":30.0,"height":38.0,"weight":13.45,"note":null},"SALMINUS 左手":{"qty":40,"length":62.0,"width":30.0,"height":38.0,"weight":13.45,"note":null},"SALMINUS鱼竿C1804M":{"qty":20,"length":58.0,"width":44.0,"height":28.0,"weight":8.85,"note":null},"SALMINUS鱼竿C1804MH":{"qty":20,"length":59.0,"width":39.0,"height":32.0,"weight":8.95,"note":null},"SALMINUS鱼竿C664L":{"qty":20,"length":61.0,"width":30.0,"height":44.0,"weight":10.4,"note":null},"SALMINUS鱼竿S1804M":{"qty":20,"length":58.0,"width":44.0,"height":28.0,"weight":8.85,"note":null},"SALMINUS鱼竿S1804MH":{"qty":20,"length":59.0,"width":39.0,"height":32.0,"weight":8.95,"note":null},"SALMINUS鱼竿S664L":{"qty":20,"length":61.0,"width":30.0,"height":44.0,"weight":10.4,"note":null},"SEASIR 帽子":{"qty":50,"length":43.5,"width":30.0,"height":37.5,"weight":4.6,"note":null},"seasir 普通钓鱼钳子-黑色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"seasir 普通钓鱼钳子-橘色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"seasir 普通钓鱼钳子-蓝色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4-0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4-1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4-1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4-1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4-2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4-2.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4-3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4-4.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4微物线-0.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4微物线-0.4":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR100米X4微物线-0.6":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR水滴轮包黑色右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR水滴轮包黑色左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR水滴轮包红色右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR水滴轮包红色左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR水滴轮包蓝色右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SEASIR水滴轮包蓝色左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SNAKEHEAD-SV右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"SNAKEHEAD-SV左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"tinghe 3000":{"qty":40,"length":67.0,"width":28.0,"height":36.0,"weight":14.55,"note":null},"tinghe 4000":{"qty":40,"length":67.0,"width":28.0,"height":36.0,"weight":15.0,"note":null},"tinghe 5000":{"qty":40,"length":73.0,"width":31.0,"height":39.0,"weight":19.8,"note":null},"tinghe 6000":{"qty":40,"length":73.0,"width":31.0,"height":39.0,"weight":20.15,"note":null},"TINGHE2500":{"qty":40,"length":61.0,"width":25.0,"height":34.0,"weight":12.0,"note":null},"X8黑蜘蛛-0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"X8黑蜘蛛-1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"X8黑蜘蛛-1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"X8黑蜘蛛-1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"X8黑蜘蛛-2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"X8黑蜘蛛-2.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"X8黑蜘蛛-3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"X8黑蜘蛛-4.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"zero-119右手":{"qty":36,"length":72.0,"width":25.0,"height":30.0,"weight":10.8,"note":null},"zero-119左手":{"qty":36,"length":72.0,"width":25.0,"height":30.0,"weight":10.8,"note":null},"zero-vx 右手":{"qty":40,"length":72.0,"width":25.0,"height":30.0,"weight":9.5,"note":null},"zero-vx 左手":{"qty":40,"length":72.0,"width":25.0,"height":30.0,"weight":9.5,"note":null},"ZERO鱼竿C502":{"qty":30,"length":88.0,"width":30.0,"height":24.0,"weight":13.0,"note":null},"ZERO鱼竿S502":{"qty":30,"length":88.0,"width":30.0,"height":24.0,"weight":13.0,"note":null},"半陶侧盖轴承":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"半陶鼓轮 右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"半陶鼓轮 左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"半陶线杯轴承":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线100米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线100米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线100米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线100米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线100米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线100米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线150米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线150米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线150米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线150米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线150米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线150米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线200米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线200米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线200米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线200米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线200米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线200米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线300米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线300米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线300米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线300米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线300米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"彩色款rexcast鱼线300米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"抄网大号":{"qty":50,"length":60.0,"width":30.0,"height":42.0,"weight":14.25,"note":null},"抄网小号":{"qty":50,"length":60.0,"width":30.0,"height":42.0,"weight":13.4,"note":null},"大钓箱-黑色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"大钓箱-红色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"大钓箱-绿色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"钓鱼伸缩扣":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"钓鱼椅中号":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"钓鱼指甲刀":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"防滑硅胶圈":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"防水路亚包":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍CASTC602":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍CASTC632":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍CASTC662":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍CASTC702MH":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍CASTS602":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍CASTS662":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍CASTS702":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍REXCAST C552ML":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍REXCAST C602ML":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍REXCAST C662M":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍REXCAST C662MH":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍REXCAST S552ML":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍REXCAST S602ML":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍REXCAST S692M":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍REXCAST S762M":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"竿稍REXCAST S802MH":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵1#黄绿色6cm/2g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵1#黄绿色8cm/5g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵11#紫色6cm/2g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵11#紫色8cm/5g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵12#黑色6cm/2g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵12#黑色8cm/5g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵2#粉色6cm/2g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵2#粉色8cm/5g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵3#黑金色6cm/2g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵3#黑金色8cm/5g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵5#红白色6cm/2g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵5#红白色8cm/5g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵7#夜光款6cm/2g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"海饵7#夜光款8cm/5g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑箭1.5米枪柄":{"qty":30,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑箭1.5米直柄":{"qty":30,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑箭1.68枪柄":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑箭1.68直柄":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑箭1.8枪柄":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑箭1.8直柄":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑箭纺车轮1000":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑箭纺车轮2000":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑箭纺车轮3000":{"qty":40,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑金钓箱大号":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑金钓箱小号":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"黑色水星-右手":{"qty":50,"length":58.0,"width":30.0,"height":37.0,"weight":14.15,"note":null},"黑色水星-左手":{"qty":50,"length":58.0,"width":30.0,"height":37.0,"weight":14.15,"note":null},"红公牛150米PE线-0.8":{"qty":0,"length":60.0,"width":30.0,"height":40.0,"weight":15.0,"note":null},"红公牛150米PE线-1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红公牛150米PE线-1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红公牛150米PE线-1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红公牛150米PE线-2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红公牛150米PE线-2.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红公牛150米PE线-3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红公牛150米PE线-4.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红公牛150米PE线-5.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红黑握丸":{"qty":0,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线100米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线100米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线100米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线100米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线100米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线100米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线150米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线150米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线150米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线150米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线150米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线150米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线200米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线200米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线200米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线200米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线200米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线200米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线300米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线300米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线300米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线300米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线300米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"红色款rexcast鱼线300米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"缓降轮1000":{"qty":40,"length":61.0,"width":25.0,"height":31.0,"weight":11.7,"note":null},"缓降轮2500":{"qty":40,"length":61.0,"width":25.0,"height":31.0,"weight":11.9,"note":null},"缓降轮3000":{"qty":40,"length":67.0,"width":28.0,"height":36.0,"weight":14.4,"note":null},"缓降轮4000":{"qty":40,"length":67.0,"width":28.0,"height":36.0,"weight":14.6,"note":null},"缓降轮5000":{"qty":40,"length":73.0,"width":31.0,"height":39.0,"weight":19.1,"note":null},"缓降轮6000":{"qty":40,"length":73.0,"width":31.0,"height":39.0,"weight":19.1,"note":null},"极度 dc右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"极度 dc左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"极格豪慢摇竿C602M":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"极格豪慢摇竿C602ML":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"极格豪慢摇竿S602M":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"极格豪慢摇竿S602ML":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"卡曼多水滴轮包右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"卡曼多水滴轮包左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"灵药LT2000":{"qty":40,"length":60.0,"width":26.0,"height":35.0,"weight":12.3,"note":null},"灵药LT300":{"qty":40,"length":60.0,"width":26.0,"height":35.0,"weight":12.3,"note":null},"领主1.8米枪柄":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"领主1.8米直柄":{"qty":20,"length":99.0,"width":32.0,"height":26.0,"weight":12.4,"note":null},"领主2.1米枪柄":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"领主2.1米直柄":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"领主2.4米枪柄":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"领主2.4米直柄":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"迈莎锐半陶右手":{"qty":50,"length":null,"width":null,"height":null,"weight":null,"note":null},"迈莎锐半陶左手":{"qty":50,"length":null,"width":null,"height":null,"weight":null,"note":null},"魔龙VIB     15g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"魔龙VIB   20g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"魔龙VIB  10g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"魔龙VIB  5g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"魔龙VIB 7g":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线100米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线100米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线100米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线100米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线100米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线100米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线150米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线150米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线150米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线150米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线150米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线150米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线200米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线200米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线200米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线200米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线200米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线200米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线300米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线300米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线300米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线300米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线300米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"墨绿款rexcast鱼线300米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"默溪C504":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"默溪C554":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"默溪S504":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"默溪S554":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"配件A 右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"配件A 左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"配件B 右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"配件B 左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"配件C 右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"配件C 左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"铅头钩双层饵盒76件套装":{"qty":50,"length":70.0,"width":52.0,"height":32.0,"weight":25.85,"note":null},"球形版MEGACUDA-右手":{"qty":0,"length":60.0,"width":30.0,"height":38.0,"weight":13.0,"note":null},"球形版MEGACUDA-左手":{"qty":40,"length":60.0,"width":30.0,"height":38.0,"weight":13.0,"note":null},"球形摇臂":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"全陶侧盖轴承":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"全陶线杯轴承":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"软饵曲柄钩白色10pcs/包":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"软饵曲柄钩橙色10pcs/包":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"软饵曲柄钩粉色10pcs/包":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"软饵曲柄钩黑金色10pcs/包":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"软饵曲柄钩黑银色10pcs/包":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"软饵曲柄钩黄色10pcs/包":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"软饵曲柄钩蓝色10pcs/包":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"软饵曲柄钩绿色10pcs/包":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"软饵曲柄钩套盒":{"qty":200,"length":54.0,"width":36.5,"height":31.0,"weight":11.15,"note":null},"润滑油脂套装新版":{"qty":500,"length":62.0,"width":30.0,"height":40.0,"weight":19.8,"note":null},"赛博龙-3000":{"qty":20,"length":45.0,"width":28.0,"height":28.0,"weight":8.0,"note":null},"深绿色款rexcast鱼线100米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线100米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线100米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线100米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线100米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线100米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线150米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线150米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线150米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线150米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线150米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线150米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线200米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线200米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线200米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线200米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线200米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线200米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线300米0.8":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线300米1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线300米1.2":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线300米1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线300米2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"深绿色款rexcast鱼线300米3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"双层饵盒-黑色":{"qty":80,"length":56.0,"width":45.0,"height":41.0,"weight":16.8,"note":null},"双层饵盒-黄色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"双层饵盒-橘色":{"qty":80,"length":56.0,"width":45.0,"height":41.0,"weight":16.8,"note":null},"双层饵盒-蓝色":{"qty":80,"length":56.0,"width":45.0,"height":41.0,"weight":16.8,"note":null},"索尼克纺车轮1000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克纺车轮2000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克纺车轮3000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克纺车轮4000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克纺车轮5000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克纺车轮7000":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克水滴轮右手6.4":{"qty":50,"length":60.0,"width":31.0,"height":37.2,"weight":14.7,"note":null},"索尼克水滴轮右手7.3":{"qty":50,"length":60.0,"width":31.0,"height":37.2,"weight":14.9,"note":null},"索尼克水滴轮右手8.1":{"qty":50,"length":60.0,"width":31.0,"height":37.2,"weight":15.1,"note":null},"索尼克水滴轮左手6.4":{"qty":50,"length":60.0,"width":31.0,"height":37.2,"weight":14.7,"note":null},"索尼克水滴轮左手7.3":{"qty":50,"length":60.0,"width":31.0,"height":37.2,"weight":14.9,"note":null},"索尼克水滴轮左手8.1":{"qty":50,"length":60.0,"width":31.0,"height":37.2,"weight":15.1,"note":null},"索尼克鱼竿C602M":{"qty":20,"length":99.0,"width":26.0,"height":32.0,"weight":11.2,"note":null},"索尼克鱼竿C662MH":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克鱼竿C672H":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克鱼竿C702M":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克鱼竿C702XH":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克鱼竿C802MH":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克鱼竿S602M":{"qty":20,"length":99.0,"width":26.0,"height":32.0,"weight":10.95,"note":null},"索尼克鱼竿S662M":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克鱼竿S702M":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"索尼克鱼竿S802MH":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳素摇臂黑色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳素摇臂红色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳素摇臂金色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳素摇臂青色":{"qty":80,"length":56.0,"width":45.0,"height":41.0,"weight":16.8,"note":null},"碳素摇臂银色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳素摇臂紫色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳线50米-1.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳线50米-1.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳线50米-1.75":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳线50米-2.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳线50米-2.5":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳线50米-3.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳线50米-4.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"碳线50米-5.0":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"溪流1000":{"qty":40,"length":43.0,"width":24.5,"height":42.0,"weight":9.1,"note":null},"溪流800S":{"qty":40,"length":43.0,"width":24.5,"height":42.0,"weight":9.1,"note":null},"小钓箱-黑色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"小钓箱-红色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"小钓箱-蓝色":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"小号双层饵盒黑色":{"qty":100,"length":53.0,"width":30.0,"height":35.0,"weight":10.0,"note":null},"小号双层饵盒黄色":{"qty":100,"length":53.0,"width":30.0,"height":35.0,"weight":10.0,"note":null},"小号双层饵盒橘色":{"qty":100,"length":53.0,"width":30.0,"height":35.0,"weight":10.0,"note":null},"小号双层饵盒蓝色":{"qty":100,"length":53.0,"width":30.0,"height":35.0,"weight":10.0,"note":null},"新CAST-X右手":{"qty":50,"length":62.0,"width":30.0,"height":38.0,"weight":14.5,"note":null},"新CAST-X左手":{"qty":50,"length":62.0,"width":30.0,"height":38.0,"weight":14.5,"note":null},"新MANSORY右手7.1":{"qty":0,"length":null,"width":null,"height":null,"weight":null,"note":null},"新MANSORY右手8.1":{"qty":0,"length":null,"width":null,"height":null,"weight":null,"note":null},"新MANSORY左手7.1":{"qty":0,"length":null,"width":null,"height":null,"weight":null,"note":null},"新MANSORY左手8.1":{"qty":0,"length":null,"width":null,"height":null,"weight":null,"note":null},"新伊克斯1500S":{"qty":20,"length":60.0,"width":25.0,"height":18.5,"weight":5.25,"note":null},"新伊克斯2500S":{"qty":20,"length":60.0,"width":25.0,"height":18.5,"weight":6.3,"note":null},"新伊克斯3000S":{"qty":20,"length":60.0,"width":25.0,"height":18.5,"weight":7.3,"note":null},"新伊克斯4000S":{"qty":20,"length":65.0,"width":27.0,"height":18.5,"weight":7.4,"note":null},"玄龙 枪柄 2.1米":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"玄龙 直柄2.1米":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"玄龙 直柄2.4米":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"玄龙枪柄 2.4米":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"旋涡右手":{"qty":50,"length":57.5,"width":30.0,"height":38.5,"weight":12.05,"note":null},"旋涡左手":{"qty":50,"length":57.5,"width":30.0,"height":38.5,"weight":12.05,"note":null},"银色水星-右手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"银色水星-左手":{"qty":null,"length":null,"width":null,"height":null,"weight":null,"note":null},"玥溪-C522":{"qty":30,"length":88.0,"width":29.0,"height":24.0,"weight":9.6,"note":null},"玥溪-C562":{"qty":20,"length":92.0,"width":32.0,"height":28.0,"weight":10.9,"note":null},"玥溪-C602":{"qty":20,"length":99.0,"width":34.0,"height":25.0,"weight":11.6,"note":null},"玥溪-C662":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"玥溪-S522":{"qty":30,"length":88.0,"width":29.0,"height":24.0,"weight":9.6,"note":null},"玥溪-S562":{"qty":20,"length":92.0,"width":32.0,"height":28.0,"weight":10.9,"note":null},"玥溪-S602":{"qty":20,"length":99.0,"width":34.0,"height":25.0,"weight":11.6,"note":null},"玥溪-S662":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"长河c502":{"qty":30,"length":88.0,"width":30.0,"height":24.0,"weight":9.0,"note":null},"长河C562":{"qty":20,"length":91.0,"width":28.0,"height":25.0,"weight":11.0,"note":null},"长河c602":{"qty":20,"length":99.0,"width":35.0,"height":28.0,"weight":12.0,"note":null},"长河c662":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null},"长河S502":{"qty":30,"length":88.0,"width":30.0,"height":24.0,"weight":9.0,"note":null},"长河S562":{"qty":20,"length":91.0,"width":28.0,"height":25.0,"weight":11.0,"note":null},"长河S602":{"qty":20,"length":99.0,"width":35.0,"height":28.0,"weight":12.0,"note":null},"长河S662":{"qty":20,"length":null,"width":null,"height":null,"weight":null,"note":null}}};
+/* ==BOXSPEC_END== */
+
+// ==========================================================================
+// Engine：与 core.py 一一对应的纯计算层（不依赖 DOM，可在 Node 中直接跑）
+// 任何算法改动必须两边同步，tests/compare_engines.py 会逐行比对结果
+// ==ENGINE_START==
+var Engine = (function () {
+  "use strict";
+
+  var INTERCEPT_KEYWORDS = ['停', '不补', '超100cm', '超100', '超长', '下架', '停产', '无库存', '无货', 'dw不补'];
+  var SITE_ALIASES = {
+    my: ['马来', 'my', 'malaysia'],
+    th: ['泰国', 'th', 'thailand'],
+    ph: ['菲律宾', 'ph', 'philippines']
+  };
+  var SITE_NAMES = { my: '马来', th: '泰国', ph: '菲律宾' };
+
+  // ---------- 基础工具 ----------
+  function cleanKey(val) {
+    if (val === null || val === undefined) return "";
+    var s = String(val).trim();
+    if (s.length > 2 && s.slice(-2) === ".0" && /^\d+$/.test(s.slice(0, -2))) s = s.slice(0, -2);
+    return s;
+  }
+
+  // Python 3 round()：恰为 .5 时取偶（银行家舍入），与 Math.round 不同
+  function pyRound(x) {
+    if (!isFinite(x)) return x;
+    var fl = Math.floor(x);
+    var diff = x - fl;
+    if (diff > 0.5) return fl + 1;
+    if (diff < 0.5) return fl;
+    return (fl % 2 === 0) ? fl : fl + 1;
+  }
+
+  function roundTo(x, n) {
+    var p = Math.pow(10, n);
+    return Math.round(x * p) / p;
+  }
+
+  function toNum(v) {
+    if (v === null || v === undefined || String(v).trim() === '') return null;
+    var n = parseFloat(String(v).replace(/,/g, ''));
+    return isNaN(n) ? null : n;
+  }
+
+  function num0(v) {
+    var n = toNum(v);
+    return n === null ? 0 : n;
+  }
+
+  function str(v) {
+    return (v === null || v === undefined) ? '' : String(v).trim();
+  }
+
+  function addr(r, c) { return XLSX.utils.encode_cell({ r: r - 1, c: c - 1 }); }
+
+  function cellVal(ws, r, c) {
+    var cell = ws[addr(r, c)];
+    if (!cell) return null;
+    return (cell.v === undefined) ? null : cell.v;
+  }
+
+  function setNum(ws, r, c, v) {
+    var a = addr(r, c);
+    if (v === null || v === undefined || v === '') { delete ws[a]; return; }
+    ws[a] = { t: 'n', v: (typeof v === 'number' ? v : num0(v)) };
+  }
+
+  function clearCell(ws, r, c) { delete ws[addr(r, c)]; }
+
+  // SheetJS 只按 !ref 写盘，写入新单元格后必须扩展范围，否则会被丢弃
+  function expandRef(ws) {
+    var rng = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    Object.keys(ws).forEach(function (k) {
+      if (k.charAt(0) === '!') return;
+      var c = XLSX.utils.decode_cell(k);
+      if (c.r > rng.e.r) rng.e.r = c.r;
+      if (c.c > rng.e.c) rng.e.c = c.c;
+      if (c.r < rng.s.r) rng.s.r = c.r;
+      if (c.c < rng.s.c) rng.s.c = c.c;
+    });
+    ws['!ref'] = XLSX.utils.encode_range(rng);
+  }
+
+  function dims(ws) {
+    var ref = ws['!ref'] || 'A1';
+    var rng = XLSX.utils.decode_range(ref);
+    return { rows: rng.e.r + 1, cols: rng.e.c + 1 };
+  }
+
+  function headersOf(ws) {
+    var d = dims(ws), map = {};
+    for (var c = 1; c <= d.cols; c++) {
+      var h = str(cellVal(ws, 1, c));
+      if (h) map[h] = c;
+    }
+    return map;
+  }
+
+  function toBytes(buf) {
+    if (buf instanceof ArrayBuffer) return new Uint8Array(buf);
+    if (buf && buf.buffer instanceof ArrayBuffer && !(buf instanceof Uint8Array)) {
+      return new Uint8Array(buf.buffer, buf.byteOffset || 0, buf.byteLength);
+    }
+    return buf;
+  }
+
+  function readWb(buf) {
+    return XLSX.read(toBytes(buf), { type: 'array', cellFormula: true, cellStyles: true, cellNF: true });
+  }
+
+  // ---------- 工作表解析（对应 core.resolve_sheet） ----------
+  function resolveSheet(wb, site, preferred) {
+    var names = wb.SheetNames.slice();
+    if (!names.length) return null;
+    if (preferred && names.indexOf(preferred) >= 0) return preferred;
+    var aliases = SITE_ALIASES[String(site).toLowerCase()] || [];
+    var i, j, n;
+    for (i = 0; i < aliases.length; i++) {
+      for (j = 0; j < names.length; j++) {
+        n = names[j];
+        if (n.toLowerCase().indexOf(aliases[i].toLowerCase()) >= 0 && (n.indexOf('模板') >= 0 || n.indexOf('补货') >= 0)) return n;
+      }
+    }
+    for (i = 0; i < aliases.length; i++) {
+      for (j = 0; j < names.length; j++) {
+        if (names[j].toLowerCase().indexOf(aliases[i].toLowerCase()) >= 0) return names[j];
+      }
+    }
+    return names[0];
+  }
+
+  // ---------- 三大数据源载入（对应 core.load_*） ----------
+  function loadSales(wb, sheetName) {
+    var ws = (sheetName && wb.Sheets[sheetName]) ? wb.Sheets[sheetName] : wb.Sheets[wb.SheetNames[0]];
+    var d = dims(ws);
+    var skuCol = null, salesCol = null, headerRow = 1;
+    var skuNames = ['SKU', '商品SKU', '库存SKU', 'sku', '商品编码'];
+    var salesNames = ['销售数量', '30天销量', '30天销售量', '近30天销量'];
+    var maxScan = Math.min(5, d.rows);
+    for (var r = 1; r <= maxScan; r++) {
+      for (var c = 1; c <= d.cols; c++) {
+        var v = str(cellVal(ws, r, c));
+        if (skuNames.indexOf(v) >= 0) { skuCol = c; headerRow = r; }
+        else if (salesNames.indexOf(v) >= 0) { salesCol = c; }
+      }
+      if (skuCol && salesCol) break;
+    }
+    if (!salesCol) {
+      for (var r2 = 1; r2 <= maxScan; r2++) {
+        for (var c2 = 1; c2 <= d.cols; c2++) {
+          var v2 = str(cellVal(ws, r2, c2));
+          if (v2.indexOf('平均') < 0 && (v2.indexOf('销售数量') >= 0 || v2.indexOf('销量') >= 0 || v2.indexOf('数量') >= 0)) {
+            salesCol = c2; break;
+          }
+        }
+        if (salesCol) { headerRow = r2; break; }
+      }
+    }
+    skuCol = skuCol || 1;
+    salesCol = salesCol || 10;
+    var map = {};
+    for (var row = headerRow + 1; row <= d.rows; row++) {
+      var sku = cleanKey(cellVal(ws, row, skuCol));
+      if (!sku) continue;
+      map[sku] = num0(cellVal(ws, row, salesCol));
+    }
+    return map;
+  }
+
+  function loadInventory(wb, sheetName) {
+    var ws = (sheetName && wb.Sheets[sheetName]) ? wb.Sheets[sheetName] : wb.Sheets[wb.SheetNames[0]];
+    var d = dims(ws);
+    var whCol = null, availCol = null, transitCol = null, headerRow = 1;
+    var whNames = ['仓库SKU ID', '仓库SKU', 'Warehouse SKU ID', 'Warehouse SKU'];
+    var availNames = ['可售数量', '在仓', 'Available'];
+    var transitNames = ['待处理的IR已到达', '在途', '待入库', 'In Transit'];
+    var maxScan = Math.min(5, d.rows);
+    for (var r = 1; r <= maxScan; r++) {
+      for (var c = 1; c <= d.cols; c++) {
+        var v = str(cellVal(ws, r, c));
+        if (whNames.indexOf(v) >= 0) { whCol = c; headerRow = r; }
+        else if (availNames.indexOf(v) >= 0) { availCol = c; }
+        else if (transitNames.indexOf(v) >= 0) { transitCol = c; }
+      }
+      if (whCol && availCol) break;
+    }
+    var map = {};
+    if (!whCol) return map;
+    for (var row = headerRow + 1; row <= d.rows; row++) {
+      var wh = cleanKey(cellVal(ws, row, whCol));
+      if (!wh) continue;
+      map[wh] = {
+        in_warehouse: availCol ? num0(cellVal(ws, row, availCol)) : 0,
+        in_transit: transitCol ? num0(cellVal(ws, row, transitCol)) : 0
+      };
+    }
+    return map;
+  }
+
+  function loadSpeed(wb) {
+    var ws = wb.Sheets[wb.SheetNames[0]];
+    var d = dims(ws);
+    var whCol = null, speedCol = null, headerRow = 1;
+    var whNames = ['仓库SKU', '仓库SKU ID', 'Warehouse SKU', 'Warehouse SKU ID'];
+    var maxScan = Math.min(5, d.rows);
+    for (var r = 1; r <= maxScan; r++) {
+      for (var c = 1; c <= d.cols; c++) {
+        var v = str(cellVal(ws, r, c));
+        if (whNames.indexOf(v) >= 0) { whCol = c; headerRow = r; }
+        else if (v.indexOf('销售速度') >= 0 || v.indexOf('Sales Velocity') >= 0) { speedCol = c; }
+      }
+      if (whCol && speedCol) break;
+    }
+    var map = {};
+    if (!whCol || !speedCol) return map;
+    for (var row = headerRow + 1; row <= d.rows; row++) {
+      var wh = cleanKey(cellVal(ws, row, whCol));
+      if (wh) map[wh] = num0(cellVal(ws, row, speedCol));
+    }
+    return map;
+  }
+
+  // 对应 core.load_box_specs
+  function loadBoxSpecs(buf) {
+    var wb = XLSX.read(toBytes(buf), { type: 'array' });
+    var ws = wb.Sheets[wb.SheetNames[0]];
+    var d = dims(ws);
+    var qtyCol = 3, lCol = 4, wCol = 5, hCol = 6, wtCol = 7, noteCol = 8;
+    for (var c = 1; c <= d.cols; c++) {
+      var v = str(cellVal(ws, 1, c));
+      if (v.indexOf('数量') >= 0 || v.indexOf('箱规') >= 0) qtyCol = c;
+      else if (v.indexOf('长') >= 0) lCol = c;
+      else if (v.indexOf('宽') >= 0) wCol = c;
+      else if (v.indexOf('高') >= 0) hCol = c;
+      else if (v.indexOf('重') >= 0) wtCol = c;
+      else if (v.indexOf('备注') >= 0) noteCol = c;
+    }
+    var specs = {};
+    for (var r = 2; r <= d.rows; r++) {
+      var skuRaw = cellVal(ws, r, 1);
+      if (skuRaw === null || str(skuRaw) === '') continue;
+      var qtyRaw = cellVal(ws, r, qtyCol);
+      var qty = null;
+      if (qtyRaw !== null && str(qtyRaw) !== '') {
+        var qn = parseFloat(String(qtyRaw));
+        qty = isNaN(qn) ? null : Math.trunc(qn);
+      }
+      specs[cleanKey(skuRaw)] = {
+        qty: qty,
+        length: toNum(cellVal(ws, r, lCol)),
+        width: toNum(cellVal(ws, r, wCol)),
+        height: toNum(cellVal(ws, r, hCol)),
+        weight: toNum(cellVal(ws, r, wtCol)),
+        note: str(cellVal(ws, r, noteCol)) || null
+      };
+    }
+    return specs;
+  }
+
+  // ---------- 需补量测算（对应 core.evaluate_row） ----------
+  function evaluateRow(sku, cz, maxLimit, remark, specs) {
+    var boxSpecs = specs || {};
+    var rem = str(remark);
+    if (rem !== '') {
+      for (var i = 0; i < INTERCEPT_KEYWORDS.length; i++) {
+        if (rem.indexOf(INTERCEPT_KEYWORDS[i]) >= 0) {
+          return { need: null, status: 'intercepted', reason: '备注命中拦截词「' + INTERCEPT_KEYWORDS[i] + '」，整行留空' };
+        }
+      }
+    }
+    if (cz === null || cz === undefined || cz <= 0) {
+      return { need: null, status: 'no_demand', reason: '充足补货量≤0，无需补货' };
+    }
+    var key = cleanKey(sku);
+    var info = boxSpecs[key];
+    if (!info || !info.qty) {
+      return { need: null, status: 'no_boxspec', reason: '箱规库无此 SKU 或未维护整箱数量' };
+    }
+    var boxQty = info.qty;
+    if (boxQty <= 0) {
+      return { need: null, status: 'no_boxspec', reason: '箱规整箱数量无效（≤0）' };
+    }
+    var boxes = pyRound(cz / boxQty);
+    if (boxes === 0 && cz >= 0.5 * boxQty) boxes = 1;
+    var candidate = boxes * boxQty;
+
+    var limit = null;
+    if (maxLimit !== null && maxLimit !== undefined && typeof maxLimit !== 'string' && !isNaN(maxLimit)) {
+      limit = Number(maxLimit);
+    }
+    var capped = false;
+    if (limit !== null && limit > 0 && candidate > limit) {
+      capped = true;
+      if (boxes > 1 && ((boxes - 1) * boxQty) <= limit) {
+        candidate = (boxes - 1) * boxQty;
+      } else {
+        candidate = Math.min(pyRound(cz), Math.floor(limit));
+      }
+    }
+    if (candidate <= 0) {
+      return { need: null, status: 'no_demand', reason: '整箱试算结果≤0，无需补货' };
+    }
+    var need = Math.trunc(pyRound(candidate));
+    var reason = capped
+      ? '整箱试算 ' + Math.trunc(boxes * boxQty) + ' 件超出站点上限 ' + Math.round(limit) + ' 件，已按上限平滑为 ' + need + ' 件（箱规 ' + boxQty + '）'
+      : '整箱试算 ' + Math.trunc(boxes) + ' 箱 × ' + boxQty + ' 件/箱 = ' + need + ' 件';
+    return { need: need, status: 'filled', reason: reason };
+  }
+
+  // ---------- 阶段一 ----------
+  function stage1(o) {
+    var wb = readWb(o.baseBuf);
+    var salesMap = loadSales(readWb(o.salesBuf), o.site + '销量');
+    var invMap = loadInventory(readWb(o.invBuf), o.site + '库存');
+    var speedMap = o.rpaBuf ? loadSpeed(readWb(o.rpaBuf)) : {};
+    var specs = o.boxSpecs || {};
+
+    var tplName = resolveSheet(wb, o.site, o.site + '补货模板');
+    var sheetName = o.date + o.site;
+
+    if (wb.Sheets[sheetName]) {
+      delete wb.Sheets[sheetName];
+      wb.SheetNames = wb.SheetNames.filter(function (n) { return n !== sheetName; });
+    }
+    var tpl = wb.Sheets[tplName];
+    var copy = {};
+    Object.keys(tpl).forEach(function (k) {
+      copy[k] = (k.charAt(0) === '!') ? tpl[k] : JSON.parse(JSON.stringify(tpl[k]));
+    });
+    wb.Sheets[sheetName] = copy;
+    wb.SheetNames.unshift(sheetName);
+
+    var ws = wb.Sheets[sheetName];
+    var h = headersOf(ws);
+    var cSku = h['SKU'] || 2;
+    var cWh = h['仓库SKU ID'] || 3;
+    var cSales = h['30天销量'] || 4;
+    var cInWh = h['在仓'] || 5;
+    var cTransit = h['在途'] || 6;
+    var cSpeed = h['销售速度'] || 13;
+    var cNeed = 11;
+    Object.keys(h).forEach(function (k) { if (k.indexOf('需补') >= 0) cNeed = h[k]; });
+    var cRemark = h['备注'] || (o.site === 'ph' ? 15 : 16);
+    var c75 = (o.site === 'ph') ? null : (h['75天'] || 15);
+    // 模板新增的「数量」列：回填该 SKU 在箱规表中的整箱数量（仅作核对参考，不参与测算）
+    var cBoxQty = h['数量'] || null;
+
+    var d = dims(ws);
+    var preview = [];
+    var stats = { filled: 0, intercepted: 0, no_boxspec: 0, no_demand: 0, total: 0 };
+    var matched = { sales: 0, inventory: 0, speed: 0 };
+
+    for (var r = 2; r <= d.rows; r++) {
+      var skuVal = cleanKey(cellVal(ws, r, cSku));
+      var whVal = cleanKey(cellVal(ws, r, cWh));
+      if (!skuVal && !whVal) continue;
+
+      var remarkVal = cellVal(ws, r, cRemark);
+      var nameVal = cellVal(ws, r, 1);
+
+      var salesVal = (skuVal in salesMap) ? salesMap[skuVal] : 0;
+      setNum(ws, r, cSales, salesVal);
+
+      var inv = invMap[whVal] || { in_warehouse: 0, in_transit: 0 };
+      var inWh = inv.in_warehouse, inTransit = inv.in_transit;
+      setNum(ws, r, cInWh, inWh);
+      setNum(ws, r, cTransit, inTransit);
+
+      var speedVal = (whVal in speedMap) ? speedMap[whVal] : 0;
+      setNum(ws, r, cSpeed, roundTo(speedVal, 2));
+
+      // 合计 G / 补货至60天 H / 剩余天数 I / 充足补货 J / 60天 N / 75天 O
+      // 全部沿用模板自带公式，此处不覆盖，避免破坏 ISBLANK 保护
+
+      var total = inWh + inTransit;
+      var cz = salesVal * 2 - total;
+      var d60 = 60 * speedVal - total;
+      var d75 = (o.site === 'ph') ? null : (75 * speedVal - total);
+      var limit = (o.site === 'ph') ? d60 : d75;
+
+      var ev = evaluateRow(skuVal, cz, limit, remarkVal, specs);
+      if (ev.need === null) clearCell(ws, r, cNeed);
+      else setNum(ws, r, cNeed, ev.need);
+
+      var specInfo = specs[skuVal];
+      var boxQtyVal = (specInfo && specInfo.qty) ? specInfo.qty : null;
+      if (cBoxQty) {
+        if (boxQtyVal) setNum(ws, r, cBoxQty, boxQtyVal);
+        else clearCell(ws, r, cBoxQty);
+      }
+
+      var days = salesVal > 0 ? roundTo(inWh / (salesVal / 30), 1) : null;
+
+      stats[ev.status] = (stats[ev.status] || 0) + 1;
+      stats.total++;
+      if (skuVal && (skuVal in salesMap)) matched.sales++;
+      if (whVal && (whVal in invMap)) matched.inventory++;
+      if (whVal && (whVal in speedMap)) matched.speed++;
+      preview.push({
+        row: r, name: nameVal, sku: skuVal, wh_sku: whVal,
+        sales: salesVal, in_wh: inWh, in_transit: inTransit, total: total,
+        days: days, cz: roundTo(cz, 4), need: ev.need === null ? '' : ev.need,
+        status: ev.status, reason: ev.reason, box_qty: boxQtyVal, speed: speedVal,
+        d60: roundTo(d60, 4), d75: d75 === null ? null : roundTo(d75, 4),
+        remark: remarkVal
+      });
+    }
+
+    expandRef(ws);
+    var outBuf = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true, compression: true });
+    return { outBuf: outBuf, preview: preview, stats: stats, matched: matched, sheet: sheetName };
+  }
+
+  // ---------- 阶段二 ----------
+  function stage2(o) {
+    var wbRep = readWb(o.repBuf);
+    var names = wbRep.SheetNames.slice();
+    var aliases = SITE_ALIASES[o.site] || [];
+    var cands = names.filter(function (n) {
+      return aliases.some(function (a) { return n.toLowerCase().indexOf(a.toLowerCase()) >= 0; });
+    });
+    if (!cands.length) cands = names;
+    var dataSheets = cands.filter(function (n) { return n.indexOf('模板') < 0; });
+    var pool = dataSheets.length ? dataSheets : cands;
+    var wsRep = wbRep.Sheets[pool[pool.length - 1]];
+
+    var hRep = headersOf(wsRep);
+    var cWh = hRep['仓库SKU ID'] || 3;
+    var cApp = hRep['采购批准'] || 12;
+    var cExp = hRep['出口货值'] || (o.site === 'ph' ? 16 : 17);
+
+    var dRep = dims(wsRep);
+    var repMap = {};
+    for (var r = 2; r <= dRep.rows; r++) {
+      var wh = cleanKey(cellVal(wsRep, r, cWh));
+      if (!wh) continue;
+      repMap[wh] = { approved: cellVal(wsRep, r, cApp), exportVal: cellVal(wsRep, r, cExp) };
+    }
+
+    var wbInb = readWb(o.inbBuf);
+    var wsInb = wbInb.Sheets[wbInb.SheetNames[0]];
+    var dInb = dims(wsInb);
+    var filled = 0, preview = [];
+
+    for (var r2 = 2; r2 <= dInb.rows; r2++) {
+      var wh2 = cleanKey(cellVal(wsInb, r2, 4));
+      var prodName = cellVal(wsInb, r2, 1);
+      var specName = cellVal(wsInb, r2, 2);
+      var extSku = cellVal(wsInb, r2, 5);
+
+      if (wh2 && (wh2 in repMap)) {
+        var item = repMap[wh2];
+        var qtyVal = null;
+        var aStr = str(item.approved);
+        if (item.approved !== null && item.approved !== undefined && ['', '0', '#N/A'].indexOf(aStr) < 0) {
+          var fv = parseFloat(String(item.approved));
+          if (!isNaN(fv)) {
+            var iv = Math.trunc(fv);
+            if (iv > 0) qtyVal = iv;
+          }
+        }
+        setNum(wsInb, r2, 6, qtyVal);
+
+        var eStr = str(item.exportVal);
+        if (item.exportVal !== null && item.exportVal !== undefined && eStr !== '' && eStr !== '#N/A') {
+          var ef = parseFloat(String(item.exportVal).replace(/,/g, ''));
+          if (!isNaN(ef)) setNum(wsInb, r2, 7, ef);
+          else { var ea = addr(r2, 7); wsInb[ea] = { t: 's', v: String(item.exportVal) }; }
+        }
+
+        if (qtyVal) {
+          filled++;
+          if (preview.length < 200) {
+            preview.push({
+              name: prodName, spec: specName, wh_sku: wh2, ext_sku: extSku,
+              qty: qtyVal, val: cellVal(wsInb, r2, 7)
+            });
+          }
+        }
+      } else {
+        clearCell(wsInb, r2, 6);
+      }
+    }
+
+    expandRef(wsInb);
+    var outBuf = XLSX.write(wbInb, { bookType: 'xlsx', type: 'array', cellStyles: true, compression: true });
+    return { outBuf: outBuf, filled: filled, preview: preview, sheet: pool[pool.length - 1] };
+  }
+
+  // ---------- 阶段三 ----------
+  // 精确判断表头是否为「箱子 #idx」，避免 '箱子 #1' 误匹配 '箱子 #19'
+  function isBoxHeader(val, idx) {
+    var s = str(val).replace(/ /g, '').replace(/\u3000/g, '');
+    return s === '箱子#' + idx || s === '箱号#' + idx || s === '箱子' + idx || s === '箱号' + idx;
+  }
+
+  function parseBoxSequence(seqStr, boxCnt) {
+    var s = String(seqStr).replace(/~/g, '-').replace(/到/g, '-');
+    if (s.indexOf('-') >= 0) {
+      var parts = s.split('-');
+      var a = parseInt(parts[0], 10), b = parseInt(parts[1], 10);
+      if (!isNaN(a) && !isNaN(b)) {
+        var arr = [];
+        for (var i = a; i <= b; i++) arr.push(i);
+        if (arr.length) return arr;
+      }
+    }
+    var v = Math.trunc(parseFloat(s));
+    if (!isNaN(v)) {
+      var n = boxCnt === null || boxCnt === undefined ? 0 : Math.trunc(parseFloat(boxCnt) || 0);
+      if (n > 1) {
+        var out = [];
+        for (var j = 0; j < n; j++) out.push(v + j);
+        return out;
+      }
+      return [v];
+    }
+    return [1];
+  }
+
+  function stage3(o) {
+    var specs = o.boxSpecs || {};
+    var wbSum = readWb(o.summaryBuf);
+    var names = wbSum.SheetNames.slice();
+    var siteName = SITE_NAMES[o.site] || o.site;
+    var matched = names.filter(function (n) {
+      return n.indexOf(siteName) >= 0 || n.toLowerCase().indexOf(o.site) >= 0;
+    });
+    var wsSum = wbSum.Sheets[matched.length ? matched[0] : wbSum.SheetNames[0]];
+
+    var d = dims(wsSum);
+    var groups = [], cur = null;
+    for (var r = 4; r <= d.rows; r++) {
+      var name = cellVal(wsSum, r, 1);
+      var qty = cellVal(wsSum, r, 2);
+      var seq = cellVal(wsSum, r, 3);
+      var boxCnt = cellVal(wsSum, r, 4);
+
+      var nameEmpty = (name === null || name === undefined || str(name) === '');
+      var qtyEmpty = (qty === null || qty === undefined || str(qty) === '');
+      if (nameEmpty && qtyEmpty) continue;
+
+      var qtyNum = qtyEmpty ? 0 : (toNum(qty) === null ? 0 : toNum(qty));
+      if (seq !== null && seq !== undefined && str(seq) !== '') {
+        cur = { seqStr: str(seq), boxes: parseBoxSequence(str(seq), boxCnt), items: [[str(name), qtyNum]] };
+        groups.push(cur);
+      } else if (cur) {
+        cur.items.push([str(name), qtyNum]);
+      }
+    }
+
+    var skuBoxMap = {}, boxSkuMap = {};
+    groups.forEach(function (g) {
+      var nb = g.boxes.length;
+      if (!nb) return;
+      g.items.forEach(function (it) {
+        var sku = cleanKey(it[0]);
+        if (!sku) return;
+        var per = it[1] / nb;
+        if (!skuBoxMap[sku]) skuBoxMap[sku] = {};
+        g.boxes.forEach(function (b) {
+          skuBoxMap[sku][b] = (skuBoxMap[sku][b] || 0) + per;
+          if (!boxSkuMap[b]) boxSkuMap[b] = [];
+          boxSkuMap[b].push([sku, per]);
+        });
+      });
+    });
+
+    var wbPack = readWb(o.packBuf);
+    var wsQty = wbPack.Sheets['已打包数量'] || wbPack.Sheets[wbPack.SheetNames[0]];
+    var wsDim = wbPack.Sheets['尺寸和重量'] || null;
+
+    var maxBox = 1;
+    Object.keys(boxSkuMap).forEach(function (k) {
+      var v = parseInt(k, 10);
+      if (!isNaN(v) && v > maxBox) maxBox = v;
+    });
+
+    var dq = dims(wsQty);
+    var boxColStart = 8, totalPackCol = 7;
+    for (var c = 1; c <= dq.cols; c++) {
+      if (isBoxHeader(cellVal(wsQty, 1, c), 1)) { boxColStart = c; break; }
+    }
+    for (var c2 = 1; c2 <= dq.cols; c2++) {
+      var hv = str(cellVal(wsQty, 1, c2));
+      if (hv.indexOf('总打包') >= 0 || (hv.indexOf('已打包') >= 0 && hv.indexOf('箱子') < 0)) { totalPackCol = c2; break; }
+    }
+
+    var keys = Object.keys(skuBoxMap);
+    var preview = [];
+    for (var pr = 2; pr <= dq.rows; pr++) {
+      var prodName = str(cellVal(wsQty, pr, 1));
+      var extSku = str(cellVal(wsQty, pr, 5));
+      var whSku = str(cellVal(wsQty, pr, 4));
+
+      var matchedSku = null;
+      [extSku, prodName, whSku].some(function (k) {
+        var kc = cleanKey(k);
+        if (kc && (kc in skuBoxMap)) { matchedSku = kc; return true; }
+        return false;
+      });
+      if (!matchedSku) {
+        keys.some(function (k) {
+          if ((extSku && extSku.indexOf(k) >= 0) || (prodName && prodName.indexOf(k) >= 0)) { matchedSku = k; return true; }
+          return false;
+        });
+      }
+
+      if (matchedSku) {
+        var dist = skuBoxMap[matchedSku];
+        var total = 0;
+        var bx = {};
+        Object.keys(dist).forEach(function (b) {
+          var v = dist[b];
+          total += v;
+          bx[b] = roundTo(v, 4);
+        });
+        setNum(wsQty, pr, totalPackCol, roundTo(total, 4));
+        Object.keys(dist).forEach(function (b) {
+          setNum(wsQty, pr, boxColStart + (parseInt(b, 10) - 1), roundTo(dist[b], 4));
+        });
+        var boxCount = Object.keys(dist).length;
+        preview.push({
+          name: prodName || matchedSku, sku: matchedSku, ext_sku: extSku, wh_sku: whSku,
+          total: roundTo(total, 4), boxes: bx, box_count: boxCount,
+          status: boxCount === 1 ? 'ok' : 'mixed',
+          reason: boxCount === 1 ? '单箱整装' : '连箱/拼箱：均分至 ' + boxCount + ' 个箱子'
+        });
+      } else if (prodName) {
+        preview.push({
+          name: prodName, sku: '', ext_sku: extSku, wh_sku: whSku,
+          total: 0, boxes: {}, box_count: 0,
+          status: 'unmatched', reason: '汇总补货表中未找到对应 SKU，未分配箱号'
+        });
+      }
+    }
+
+    if (wsDim) {
+      var dd = dims(wsDim);
+      var lenRow = 2, widRow = 3, hgtRow = 4, wtRow = 5;
+      for (var rr = 1; rr <= dd.rows; rr++) {
+        var lv = str(cellVal(wsDim, rr, 1));
+        if (lv.indexOf('长') >= 0) lenRow = rr;
+        else if (lv.indexOf('宽') >= 0) widRow = rr;
+        else if (lv.indexOf('高') >= 0) hgtRow = rr;
+        else if (lv.indexOf('重') >= 0) wtRow = rr;
+      }
+      var dimColStart = 2;
+      for (var dc = 1; dc <= dd.cols; dc++) {
+        if (isBoxHeader(cellVal(wsDim, 1, dc), 1)) { dimColStart = dc; break; }
+      }
+      Object.keys(boxSkuMap).forEach(function (bKey) {
+        var col = dimColStart + (parseInt(bKey, 10) - 1);
+        var list = boxSkuMap[bKey];
+        var spec = list.length === 1 ? specs[list[0][0]] : null;
+        if (spec && spec.length) {
+          setNum(wsDim, lenRow, col, spec.length);
+          setNum(wsDim, widRow, col, spec.width);
+          setNum(wsDim, hgtRow, col, spec.height);
+          setNum(wsDim, wtRow, col, spec.weight);
+        } else {
+          clearCell(wsDim, lenRow, col);
+          clearCell(wsDim, widRow, col);
+          clearCell(wsDim, hgtRow, col);
+          clearCell(wsDim, wtRow, col);
+        }
+      });
+    }
+
+    expandRef(wsQty);
+    if (wsDim) expandRef(wsDim);
+    var outBuf = XLSX.write(wbPack, { bookType: 'xlsx', type: 'array', cellStyles: true, compression: true });
+    return { outBuf: outBuf, groups: groups.length, maxBox: maxBox, preview: preview };
+  }
+
+  // ---------- 三重校验 ----------
+  function validate(o) {
+    var specs = o.boxSpecs || {};
+    var res = {};
+
+    if (o.masterBuf) {
+      try {
+        var wb = readWb(o.masterBuf);
+        var ws = wb.Sheets[resolveSheet(wb, o.site)];
+        var h = headersOf(ws);
+        var cSku = h['SKU'] || 2, cWh = h['仓库SKU ID'] || 3;
+        var d = dims(ws), total = 0, unknown = [];
+        for (var r = 2; r <= d.rows; r++) {
+          var sku = cleanKey(cellVal(ws, r, cSku));
+          var wh = cleanKey(cellVal(ws, r, cWh));
+          if (!sku && !wh) continue;
+          total++;
+          if (sku && !(sku in specs)) unknown.push(sku);
+        }
+        if (!total) res.sku_check = { pass: false, msg: '补货总表中未读到任何商品行', detail: [] };
+        else if (unknown.length) res.sku_check = {
+          pass: false, detail: unknown.slice(0, 50),
+          msg: unknown.length + '/' + total + ' 个 SKU 未在箱规库中找到（' + unknown.length + ' 个），这些行需补量会留空'
+        };
+        else res.sku_check = { pass: true, msg: total + '/' + total + ' 个 SKU 全部命中箱规库', detail: [] };
+      } catch (e) {
+        res.sku_check = { pass: false, msg: '总表读取失败：' + e.message, detail: [] };
+      }
+    } else {
+      res.sku_check = { pass: false, msg: '未提供补货总表，无法校验 SKU 字典', detail: [] };
+    }
+
+    if (o.packingBuf) {
+      try {
+        var wbp = readWb(o.packingBuf);
+        var wsp = wbp.Sheets['已打包数量'] || wbp.Sheets[wbp.SheetNames[0]];
+        var dp = dims(wsp);
+        var boxStart = null, totalCol = null, approvedCol = null;
+        for (var c = 1; c <= dp.cols; c++) {
+          var hv = str(cellVal(wsp, 1, c));
+          if (boxStart === null && isBoxHeader(hv, 1)) boxStart = c;
+          if ((hv.indexOf('总打包') >= 0 || (hv.indexOf('已打包') >= 0 && hv.indexOf('箱子') < 0)) && totalCol === null) totalCol = c;
+          if (hv.indexOf('批准') >= 0 && approvedCol === null) approvedCol = c;
+        }
+        if (boxStart === null) {
+          res.balance_check = { pass: false, msg: '打包模板未找到「箱子 #1」列', detail: [] };
+        } else {
+          var diffs = [], checked = 0;
+          for (var rr = 2; rr <= dp.rows; rr++) {
+            var nm = str(cellVal(wsp, rr, 1));
+            if (!nm) continue;
+            var sum = 0;
+            for (var cc = boxStart; cc <= dp.cols; cc++) {
+              var v = cellVal(wsp, rr, cc);
+              if (typeof v === 'number') sum += v;
+            }
+            if (sum <= 0) continue;
+            checked++;
+            var target = null;
+            [approvedCol, totalCol].forEach(function (col) {
+              if (target === null && col) {
+                var tv = cellVal(wsp, rr, col);
+                if (typeof tv === 'number') target = tv;
+              }
+            });
+            if (target !== null && Math.abs(sum - target) > 0.001) {
+              diffs.push(nm + ': 各箱合计 ' + Math.round(sum) + ' ≠ 数量 ' + Math.round(target) + '（行' + rr + '）');
+            }
+          }
+          res.balance_check = {
+            pass: diffs.length === 0,
+            msg: diffs.length === 0 ? (checked + ' 行装箱数量 100% 闭环无偏差') : (diffs.length + ' 行存在装箱数量偏差'),
+            detail: diffs.slice(0, 50)
+          };
+        }
+      } catch (e) {
+        res.balance_check = { pass: false, msg: '打包表读取失败：' + e.message, detail: [] };
+      }
+    } else {
+      res.balance_check = { pass: false, msg: '未提供打包表，无法校验装箱闭环（需先执行阶段三）', detail: [] };
+    }
+
+    var over = [], big = [];
+    Object.keys(specs).forEach(function (sku) {
+      var s = specs[sku];
+      if (s.weight && s.weight > 30) over.push(sku + ': ' + s.weight + 'kg');
+      if ((s.length && s.length > 100) || (s.width && s.width > 100) || (s.height && s.height > 100)) {
+        big.push(sku + ': ' + s.length + 'x' + s.width + 'x' + s.height);
+      }
+    });
+    if (!Object.keys(specs).length) {
+      res.dim_weight_check = { pass: false, msg: '箱规库为空，无法校验尺寸重量', detail: [] };
+    } else if (over.length || big.length) {
+      res.dim_weight_check = {
+        pass: false,
+        msg: '存在 ' + over.length + ' 个超重箱、' + big.length + ' 个超长箱，入库前需确认',
+        detail: over.concat(big).slice(0, 50)
+      };
+    } else {
+      res.dim_weight_check = {
+        pass: true, msg: Object.keys(specs).length + ' 个 SKU 箱规均满足 单箱≤30kg 且 单边≤100cm', detail: []
+      };
+    }
+
+    return res;
+  }
+
+  return {
+    cleanKey: cleanKey, pyRound: pyRound, roundTo: roundTo,
+    resolveSheet: resolveSheet, loadSales: loadSales, loadInventory: loadInventory,
+    loadSpeed: loadSpeed, loadBoxSpecs: loadBoxSpecs, evaluateRow: evaluateRow,
+    parseBoxSequence: parseBoxSequence, isBoxHeader: isBoxHeader,
+    readWb: readWb, headersOf: headersOf, dims: dims,
+    stage1: stage1, stage2: stage2, stage3: stage3, validate: validate
+  };
+})();
+// ==ENGINE_END==
+
+// ==========================================================================
+// UI 层：文件交互、双引擎调度、预览渲染、下载
+// ==========================================================================
+(function () {
+  "use strict";
+
+  var SITE_META = {
+    my: { label: '马来西亚', limit: 75 },
+    th: { label: '泰国', limit: 75 },
+    ph: { label: '菲律宾', limit: 60 }
+  };
+  var REQUIRED = {
+    1: [['base', '补货底表'], ['sales', '马帮销量表'], ['inv', '官方仓库存表']],
+    2: [['v2rep', '补货总表'], ['v2inb', '入库申请模板']],
+    3: [['v3sum', '汇总补货表'], ['v3pack', 'Shopee打包模板']],
+    4: [['v4master', '补货总表']]
+  };
+  var FILE_LABEL = {
+    base: '补货底表', sales: '马帮销量表', inv: '库存表', rpa: '销售速度表',
+    v2rep: '补货总表', v2inb: '入库模板',
+    v3sum: '汇总补货表', v3pack: '打包模板',
+    v4master: '补货总表', v4packing: '已打包表'
+  };
+
+  var STATE = {
+    mode: 'browser', apiBase: '', health: null, site: 'my',
+    files: {},
+    boxSpecs: {},
+    boxMeta: { source: '未内置', count: 0, version: '', updated: '' },
+    out: { s1: null, s2: null, s3: null }
+  };
+
+  function el(id) { return document.getElementById(id); }
+
+  function toast(msg, kind) {
+    var t = el('toast');
+    t.textContent = msg;
+    t.className = 'show ' + (kind || '');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function () { t.className = ''; }, kind === 'err' ? 6000 : 3200);
+  }
+
+  function fmt(v, digits) {
+    if (v === null || v === undefined || v === '') return '';
+    var n = Number(v);
+    if (isNaN(n)) return String(v);
+    var d = (digits === undefined) ? 2 : digits;
+    var s = n.toFixed(d);
+    s = s.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+    return s;
+  }
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function todayDate() {
+    var now = new Date();
+    return (now.getMonth() + 1) + '.' + now.getDate();
+  }
+
+  // ---------------- 引擎探测 ----------------
+  function probeOne(base) {
+    return new Promise(function (resolve) {
+      var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var timer = setTimeout(function () { if (ctrl) ctrl.abort(); resolve(null); }, 1600);
+      fetch(base + '/api/health', { signal: ctrl ? ctrl.signal : undefined, cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          clearTimeout(timer);
+          if (j && j.ok && j.app === 'shopee-replenishment') resolve({ base: base, health: j });
+          else resolve(null);
+        })
+        .catch(function () { clearTimeout(timer); resolve(null); });
+    });
+  }
+
+  function probeBackend() {
+    var bases = [];
+    if (location.protocol === 'http:' || location.protocol === 'https:') bases.push(location.origin);
+    for (var p = 8765; p <= 8775; p++) bases.push('http://127.0.0.1:' + p);
+    bases = bases.filter(function (v, i, a) { return a.indexOf(v) === i; });
+
+    return Promise.all(bases.map(function (b) {
+      return probeOne(b);
+    })).then(function (results) {
+      var hits = results.filter(Boolean);
+      if (!hits.length) return null;
+      var same = hits.filter(function (h) { return h.base === location.origin; })[0];
+      if (same) return same;
+      hits.sort(function (a, b) {
+        return parseInt(a.base.split(':').pop(), 10) - parseInt(b.base.split(':').pop(), 10);
+      });
+      return hits[0];
+    });
+  }
+
+  function applyModeUI() {
+    var badge = el('mode-badge');
+    if (STATE.mode === 'backend') {
+      badge.className = 'mode-badge backend';
+      badge.textContent = '● 后端引擎 v' + (STATE.health.version || '') + '（公式与条件格式完整保留）';
+      badge.title = STATE.apiBase;
+    } else {
+      badge.className = 'mode-badge browser';
+      badge.textContent = '● 浏览器引擎（离线运行 · 条件格式不写入）';
+      badge.title = '未检测到本地服务。双击 run_web.bat 可启用后端引擎，生成的 Excel 会完整保留条件格式。';
+    }
+  }
+
+  // ---------------- 箱规库 ----------------
+  function renderBoxSpec() {
+    var m = STATE.boxMeta;
+    var node = el('boxspec-meta');
+    var count = (STATE.boxSpecs && Object.keys(STATE.boxSpecs).length) || 0;
+    if (!count) {
+      node.innerHTML = '<span class="muted">未载入任何箱规 —— 需补量会全部留空，请上传「补货箱规表.xlsx」</span>';
+      return;
+    }
+    var bits = ['已载入 <b>' + count + ' 个 SKU 箱规</b>'];
+    if (m.source) bits.push('来源：' + esc(m.source));
+    if (m.version) bits.push('版本：' + esc(m.version));
+    if (m.updated) bits.push('更新：' + esc(m.updated));
+    if (STATE.mode === 'browser') bits.push('<span class="muted">浏览器模式仅本次会话有效</span>');
+    node.innerHTML = bits.join(' ｜ ');
+  }
+
+  function refreshBoxSpec() {
+    if (STATE.mode === 'backend') {
+      return fetch(STATE.apiBase + '/api/health', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          STATE.health = j;
+          var b = j.boxspec || {};
+          STATE.boxMeta = { source: b.source, count: b.count, version: b.version, updated: b.updated };
+          return loadBackendBoxSpecs();
+        })
+        .catch(function () { renderBoxSpec(); });
+    }
+    STATE.boxSpecs = (EMBEDDED_BOXSPEC && EMBEDDED_BOXSPEC.specs) || {};
+    STATE.boxMeta = {
+      source: EMBEDDED_BOXSPEC.source || '', count: EMBEDDED_BOXSPEC.count || 0,
+      version: EMBEDDED_BOXSPEC.version || '', updated: EMBEDDED_BOXSPEC.updated || ''
+    };
+    renderBoxSpec();
+    return Promise.resolve();
+  }
+
+  // 后端模式下箱规由服务端读取，前端只需一份用于阶段四展示计数
+  function loadBackendBoxSpecs() {
+    STATE.boxSpecs = (EMBEDDED_BOXSPEC && EMBEDDED_BOXSPEC.specs) || {};
+    renderBoxSpec();
+    return Promise.resolve();
+  }
+
+  function handleBoxSpecUpload(input) {
+    var file = input.files && input.files[0];
+    if (!file) return;
+    if (STATE.mode === 'backend') {
+      fileToBase64(file).then(function (b64) {
+        return postJSON('/api/boxspec', { file: { name: file.name, data: b64 } });
+      }).then(function (res) {
+        if (!res.ok) { toast(res.error || '箱规表解析失败', 'err'); return; }
+        toast('箱规库已更新：' + res.boxspec.count + ' 个 SKU', 'ok');
+        return refreshBoxSpec();
+      }).catch(function (e) { toast('上传失败：' + e.message, 'err'); })
+        .then(function () { input.value = ''; });
+      return;
+    }
+    if (typeof XLSX === 'undefined') { toast('SheetJS 未加载，无法解析箱规表', 'err'); return; }
+    readFileBuffer(file).then(function (buf) {
+      var specs = Engine.loadBoxSpecs(buf);
+      var n = Object.keys(specs).length;
+      if (!n) { toast('未能解析出箱规，请确认首列为 SKU、且存在数量/长/宽/高/重列', 'err'); return; }
+      STATE.boxSpecs = specs;
+      STATE.boxMeta = {
+        source: file.name, count: n, version: '临时',
+        updated: new Date().toLocaleString('zh-CN', { hour12: false })
+      };
+      renderBoxSpec();
+      toast('箱规库已载入 ' + n + ' 个 SKU（仅本次会话有效）', 'ok');
+    }).catch(function (e) { toast('读取失败：' + e.message, 'err'); })
+      .then(function () { input.value = ''; });
+  }
+
+  // ---------------- 文件选择 ----------------
+  function pickFile(key) { el('file-' + key).click(); }
+
+  function setFile(key, file) {
+    STATE.files[key] = file;
+    var badge = el('badge-' + key);
+    var box = document.querySelector('.dnd-box[data-key="' + key + '"]');
+    if (badge) { badge.textContent = '✅ ' + file.name; badge.title = file.name; }
+    if (box) box.classList.add('loaded');
+  }
+
+  function bindInputs() {
+    Object.keys(FILE_LABEL).forEach(function (key) {
+      var input = el('file-' + key);
+      if (!input) return;
+      input.addEventListener('change', function () {
+        if (input.files && input.files[0]) setFile(key, input.files[0]);
+      });
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('.dnd-box'), function (box) {
+      var key = box.getAttribute('data-key');
+      ['dragenter', 'dragover'].forEach(function (evt) {
+        box.addEventListener(evt, function (e) { e.preventDefault(); box.classList.add('dragover'); });
+      });
+      ['dragleave', 'dragend'].forEach(function (evt) {
+        box.addEventListener(evt, function () { box.classList.remove('dragover'); });
+      });
+      box.addEventListener('drop', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        box.classList.remove('dragover');
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+          setFile(key, e.dataTransfer.files[0]);
+        }
+      });
+    });
+  }
+
+  function readFileBuffer(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(fr.result); };
+      fr.onerror = function () { reject(new Error('读取 ' + file.name + ' 失败')); };
+      fr.readAsArrayBuffer(file);
+    });
+  }
+
+  function fileToBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () {
+        var s = String(fr.result);
+        resolve(s.indexOf(',') >= 0 ? s.split(',')[1] : s);
+      };
+      fr.onerror = function () { reject(new Error('读取 ' + file.name + ' 失败')); };
+      fr.readAsDataURL(file);
+    });
+  }
+
+  function postJSON(path, payload) {
+    return fetch(STATE.apiBase + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function (r) {
+      return r.json().then(function (j) { return j; });
+    });
+  }
+
+  function payloadWithFiles(keys) {
+    var jobs = keys.map(function (k) {
+      var f = STATE.files[k];
+      if (!f) return Promise.resolve([k, null]);
+      return fileToBase64(f).then(function (b64) { return [k, { name: f.name, data: b64 }]; });
+    });
+    return Promise.all(jobs).then(function (pairs) {
+      var out = {};
+      pairs.forEach(function (p) { out[p[0]] = p[1]; });
+      return out;
+    });
+  }
+
+  // ---------------- 通用 UI ----------------
+  function setBusy(btnId, busy, textWhenBusy) {
+    var btn = el(btnId);
+    if (!btn) return;
+    if (busy) {
+      btn.dataset.label = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span>' + (textWhenBusy || '⏳ 计算中…') + '</span>';
+    } else {
+      btn.disabled = false;
+      if (btn.dataset.label) btn.innerHTML = btn.dataset.label;
+    }
+  }
+
+  function checkRequired(stage) {
+    var miss = REQUIRED[stage].filter(function (p) { return !STATE.files[p[0]]; })
+      .map(function (p) { return p[1]; });
+    if (miss.length) { toast('请先导入：' + miss.join('、'), 'err'); return false; }
+    return true;
+  }
+
+  function batchDate() {
+    var v = (el('date-input').value || '').trim();
+    return v || todayDate();
+  }
+
+  // ---------------- 阶段一 ----------------
+  function runStage1() {
+    if (!checkRequired(1)) return;
+    var site = STATE.site, date = batchDate();
+    setBusy('btn-stage1', true, '⏳ 正在测算并生成总表…');
+    el('s1-caption').textContent = '计算中…';
+
+    var job;
+    if (STATE.mode === 'backend') {
+      job = payloadWithFiles(['base', 'sales', 'inv', 'rpa']).then(function (files) {
+        files.site = site; files.date = date;
+        return postJSON('/api/stage1', files);
+      }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || '后端计算失败');
+        STATE.out.s1 = { backend: true, id: res.file.id, name: res.file.name };
+        var bWarn = (res.warnings || []).slice();
+        var bMis = mismatchWarning(res.stats, res.matched);
+        if (bMis) bWarn.push(bMis);
+        renderS1(res.preview, res.stats, bWarn, '后端 Python 引擎');
+        setOutputCard('s1', res.file.name, '工作表 ' + res.sheet + ' · 公式与条件格式完整保留', true);
+        if (bWarn.length) toast(bWarn.join('；'), 'err');
+      });
+    } else {
+      if (typeof XLSX === 'undefined') { setBusy('btn-stage1', false); toast('SheetJS 未加载，请改用 run_web.bat 启动后端模式', 'err'); return; }
+      job = Promise.resolve().then(function () {
+        return Promise.all([
+          readFileBuffer(STATE.files.base), readFileBuffer(STATE.files.sales), readFileBuffer(STATE.files.inv),
+          STATE.files.rpa ? readFileBuffer(STATE.files.rpa) : Promise.resolve(null)
+        ]);
+      }).then(function (bufs) {
+        var res = Engine.stage1({
+          baseBuf: bufs[0], salesBuf: bufs[1], invBuf: bufs[2], rpaBuf: bufs[3],
+          site: site, date: date, boxSpecs: STATE.boxSpecs
+        });
+        var name = '官方仓补货总表_' + date + site + '.xlsx';
+        STATE.out.s1 = { backend: false, buf: res.outBuf, name: name };
+        var warns = [];
+        if (!Object.keys(STATE.boxSpecs).length) warns.push('箱规库为空，需补量全部留空');
+        else if (res.stats.no_boxspec) warns.push(res.stats.no_boxspec + ' 行因缺少箱规留空');
+        var mis = mismatchWarning(res.stats, res.matched);
+        if (mis) warns.push(mis);
+        renderS1(res.preview, res.stats, warns, '浏览器 SheetJS 引擎');
+        setOutputCard('s1', name, '工作表 ' + res.sheet + ' · 浏览器模式不含条件格式', true);
+        if (warns.length) toast(warns.join('；'), 'err');
+      });
+    }
+
+    job.catch(function (e) {
+      toast('阶段一失败：' + e.message, 'err');
+      el('s1-caption').textContent = '执行失败';
+    }).then(function () { setBusy('btn-stage1', false); });
+  }
+
+  function mismatchWarning(stats, matched) {
+    if (!matched || !stats || stats.total < 30) return null;
+    var invRate = (matched.inventory || 0) / stats.total;
+    var salesRate = (matched.sales || 0) / stats.total;
+    if (invRate < 0.6) {
+      return '库存表命中率仅 ' + Math.round(invRate * 100) + '%（'
+        + (matched.inventory || 0) + '/' + stats.total + '），当前文件可能不属于所选站点，请核对';
+    }
+    if (salesRate < 0.6) {
+      return '销量表命中率仅 ' + Math.round(salesRate * 100) + '%（'
+        + (matched.sales || 0) + '/' + stats.total + '），当前文件可能不属于所选站点，请核对';
+    }
+    return null;
+  }
+
+  function renderS1(preview, stats, warnings, engineLabel) {
+    var body = el('s1-body');
+    if (!preview || !preview.length) {
+      body.innerHTML = '<tr><td colspan="15" class="empty-hint">没有读到任何商品行，请检查补货底表格式</td></tr>';
+    } else {
+      var rows = preview.slice(0, 300).map(function (r) {
+        var needCell = (r.need === '' || r.need === null)
+          ? '<td class="cell-muted">(留空)</td>'
+          : '<td class="cell-red">' + fmt(r.need, 0) + '</td>';
+        var daysCell = (r.days === null || r.days === undefined)
+          ? '<td class="cell-muted">-</td>'
+          : (r.days < 45 ? '<td class="cell-red">' + fmt(r.days, 1) + ' 天</td>'
+            : '<td>' + fmt(r.days, 1) + ' 天</td>');
+        var czCell = (r.cz > 10) ? '<td class="cell-blue">' + fmt(r.cz) + '</td>'
+          : (r.cz > 0 ? '<td class="cell-blue">' + fmt(r.cz) + '</td>' : '<td>' + fmt(r.cz) + '</td>');
+        var pill = { filled: 'st-filled', intercepted: 'st-intercepted', no_boxspec: 'st-no_boxspec', no_demand: 'st-no_demand' }[r.status] || 'st-no_demand';
+        var label = { filled: '已测算', intercepted: '备注拦截', no_boxspec: '缺箱规', no_demand: '无需补货' }[r.status] || r.status;
+        return '<tr>' +
+          '<td class="cell-left">' + esc(r.name) + '</td>' +
+          '<td class="cell-left">' + esc(r.sku) + '</td>' +
+          '<td>' + fmt(r.sales) + '</td><td>' + fmt(r.in_wh) + '</td><td>' + fmt(r.in_transit) + '</td>' +
+          '<td>' + fmt(r.total) + '</td>' + daysCell + czCell + needCell +
+          '<td>' + (r.box_qty ? fmt(r.box_qty, 0) : '<span class="cell-muted">-</span>') + '</td>' +
+          '<td>' + fmt(r.speed) + '</td><td>' + fmt(r.d60) + '</td>' +
+          '<td>' + (r.d75 === null || r.d75 === undefined ? '-' : fmt(r.d75)) + '</td>' +
+          '<td class="cell-left">' + (r.remark ? esc(r.remark) : '-') + '</td>' +
+          '<td class="reason-txt"><span class="status-pill ' + pill + '">' + label + '</span> ' + esc(r.reason) + '</td>' +
+          '</tr>';
+      }).join('');
+      if (preview.length > 300) {
+        rows += '<tr><td colspan="15" class="empty-hint">仅显示前 300 行，共 ' + preview.length + ' 行（Excel 中为完整数据）</td></tr>';
+      }
+      body.innerHTML = rows;
+    }
+
+    var chips = [
+      ['已测算补货 <b>' + stats.filled + '</b> 行', 'ok'],
+      ['备注拦截 <b>' + stats.intercepted + '</b>', stats.intercepted ? 'bad' : ''],
+      ['缺箱规留空 <b>' + stats.no_boxspec + '</b>', stats.no_boxspec ? 'warn' : ''],
+      ['无需补货 <b>' + stats.no_demand + '</b>', ''],
+      ['商品行合计 <b>' + stats.total + '</b>', '']
+    ];
+    el('s1-stats').innerHTML = chips.map(function (c) {
+      return '<span class="stat-chip ' + c[1] + '">' + c[0] + '</span>';
+    }).join('') + (warnings && warnings.length
+      ? '<span class="stat-chip bad">' + esc(warnings.join('；')) + '</span>' : '');
+
+    el('s1-caption').textContent = '共 ' + stats.total + ' 行 · 引擎：' + engineLabel + ' · 站点上限 '
+      + SITE_META[STATE.site].limit + ' 天';
+  }
+
+  // ---------------- 阶段二 ----------------
+  function runStage2() {
+    if (!checkRequired(2)) return;
+    var site = STATE.site, date = batchDate();
+    setBusy('btn-stage2', true, '⏳ 正在生成入库申请表…');
+    el('s2-caption').textContent = '计算中…';
+
+    var job;
+    if (STATE.mode === 'backend') {
+      job = payloadWithFiles(['v2rep', 'v2inb']).then(function (files) {
+        files.site = site; files.date = date;
+        return postJSON('/api/stage2', { site: site, date: date, rep: files.v2rep, inb: files.v2inb });
+      }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || '后端计算失败');
+        STATE.out.s2 = { backend: true, id: res.file.id, name: res.file.name };
+        renderS2(res.preview, res.filled, '后端 Python 引擎');
+        setOutputCard('s2', res.file.name, '采购批准 ' + res.filled + ' 条已填报', true);
+      });
+    } else {
+      if (typeof XLSX === 'undefined') { setBusy('btn-stage2', false); toast('SheetJS 未加载', 'err'); return; }
+      job = Promise.all([readFileBuffer(STATE.files.v2rep), readFileBuffer(STATE.files.v2inb)])
+        .then(function (bufs) {
+          var res = Engine.stage2({ repBuf: bufs[0], inbBuf: bufs[1], site: site, date: date });
+          var name = date + site + '_入库申请填写表_已填充.xlsx';
+          STATE.out.s2 = { backend: false, buf: res.outBuf, name: name };
+          renderS2(res.preview, res.filled, '浏览器 SheetJS 引擎');
+          setOutputCard('s2', name, '采购批准 ' + res.filled + ' 条已填报', true);
+        });
+    }
+
+    job.catch(function (e) {
+      toast('阶段二失败：' + e.message, 'err');
+      el('s2-caption').textContent = '执行失败';
+    }).then(function () { setBusy('btn-stage2', false); });
+  }
+
+  function renderS2(preview, filled, engineLabel) {
+    var body = el('s2-body');
+    if (!preview || !preview.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty-hint">没有匹配到任何已批准的 SKU，请检查 Warehouse SKU ID 是否一致</td></tr>';
+    } else {
+      body.innerHTML = preview.map(function (r) {
+        return '<tr><td class="cell-left">' + esc(r.name) + '</td><td class="cell-left">' + esc(r.spec) + '</td>' +
+          '<td class="cell-left">' + esc(r.wh_sku) + '</td><td class="cell-left">' + esc(r.ext_sku) + '</td>' +
+          '<td class="cell-red">' + fmt(r.qty, 0) + '</td><td>' + fmt(r.val) + '</td></tr>';
+      }).join('');
+    }
+    el('s2-caption').textContent = '已填报 ' + filled + ' 条 · 引擎：' + engineLabel;
+  }
+
+  // ---------------- 阶段三 ----------------
+  function runStage3() {
+    if (!checkRequired(3)) return;
+    var site = STATE.site, date = batchDate();
+    setBusy('btn-stage3', true, '⏳ 正在生成打包表…');
+    el('s3-caption').textContent = '计算中…';
+
+    var job;
+    if (STATE.mode === 'backend') {
+      job = payloadWithFiles(['v3sum', 'v3pack']).then(function (files) {
+        return postJSON('/api/stage3', { site: site, date: date, summary: files.v3sum, pack: files.v3pack });
+      }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || '后端计算失败');
+        STATE.out.s3 = { backend: true, id: res.file.id, name: res.file.name };
+        renderS3(res.preview, res.groups, res.max_box, '后端 Python 引擎');
+        setOutputCard('s3', res.file.name, res.groups + ' 个装箱组，分配至箱子 #1 ~ #' + res.max_box, true);
+      });
+    } else {
+      if (typeof XLSX === 'undefined') { setBusy('btn-stage3', false); toast('SheetJS 未加载', 'err'); return; }
+      job = Promise.all([readFileBuffer(STATE.files.v3sum), readFileBuffer(STATE.files.v3pack)])
+        .then(function (bufs) {
+          var res = Engine.stage3({
+            summaryBuf: bufs[0], packBuf: bufs[1], site: site, date: date, boxSpecs: STATE.boxSpecs
+          });
+          var name = date + '虾皮' + SITE_META[site].label + '_已打包.xlsx';
+          STATE.out.s3 = { backend: false, buf: res.outBuf, name: name };
+          renderS3(res.preview, res.groups, res.maxBox, '浏览器 SheetJS 引擎');
+          setOutputCard('s3', name, res.groups + ' 个装箱组，分配至箱子 #1 ~ #' + res.maxBox, true);
+        });
+    }
+
+    job.catch(function (e) {
+      toast('阶段三失败：' + e.message, 'err');
+      el('s3-caption').textContent = '执行失败';
+    }).then(function () { setBusy('btn-stage3', false); });
+  }
+
+  function renderS3(preview, groups, maxBox, engineLabel) {
+    var body = el('s3-body');
+    if (!preview || !preview.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty-hint">没有读到可装箱的行，请检查汇总补货表（第4行起：名称/数量/序号/箱数）</td></tr>';
+    } else {
+      body.innerHTML = preview.map(function (r) {
+        var dist = Object.keys(r.boxes || {}).map(function (b) {
+          return '#' + b + ':' + fmt(r.boxes[b], 2);
+        }).join('，') || '-';
+        var pill = { ok: 'st-ok', mixed: 'st-mixed', unmatched: 'st-unmatched' }[r.status] || 'st-no_demand';
+        var label = { ok: '单箱', mixed: '连箱/拼箱', unmatched: '未匹配' }[r.status] || r.status;
+        return '<tr><td class="cell-left">' + esc(r.name) + '<br><span class="cell-muted">' + esc(r.ext_sku || r.sku) + '</span></td>' +
+          '<td>' + fmt(r.total, 2) + '</td><td>' + r.box_count + '</td>' +
+          '<td class="cell-left">' + esc(dist) + '</td>' +
+          '<td><span class="status-pill ' + pill + '">' + label + '</span></td>' +
+          '<td class="reason-txt">' + esc(r.reason) + '</td></tr>';
+      }).join('');
+    }
+    el('s3-caption').textContent = groups + ' 个装箱组 · 最大箱号 #' + maxBox + ' · 引擎：' + engineLabel;
+  }
+
+  // ---------------- 阶段四 ----------------
+  function runStage4() {
+    if (!checkRequired(4)) return;
+    setBusy('btn-stage4', true, '⏳ 校验中…');
+    var site = STATE.site;
+
+    var job;
+    if (STATE.mode === 'backend') {
+      job = payloadWithFiles(['v4master', 'v4packing']).then(function (files) {
+        return postJSON('/api/validate', {
+          site: site, master: files.v4master, packing: files.v4packing
+        });
+      }).then(function (res) {
+        if (!res.ok) throw new Error(res.error || '校验失败');
+        renderChecks(res.results);
+      });
+    } else {
+      if (typeof XLSX === 'undefined') { setBusy('btn-stage4', false); toast('SheetJS 未加载', 'err'); return; }
+      var jobs = [readFileBuffer(STATE.files.v4master)];
+      jobs.push(STATE.files.v4packing ? readFileBuffer(STATE.files.v4packing) : Promise.resolve(null));
+      job = Promise.all(jobs).then(function (bufs) {
+        var results = Engine.validate({
+          masterBuf: bufs[0], packingBuf: bufs[1], site: site, boxSpecs: STATE.boxSpecs
+        });
+        renderChecks(results);
+      });
+    }
+
+    job.catch(function (e) { toast('校验失败：' + e.message, 'err'); })
+      .then(function () { setBusy('btn-stage4', false); });
+  }
+
+  function renderChecks(results) {
+    var map = [['chk-1', 'sku_check'], ['chk-2', 'balance_check'], ['chk-3', 'dim_weight_check']];
+    var detailHtml = '';
+    map.forEach(function (pair) {
+      var node = el(pair[0]);
+      var r = results[pair[1]];
+      if (!r) return;
+      node.className = 'check-result ' + (r.pass ? 'check-pass' : 'check-fail');
+      node.textContent = (r.pass ? '✔ ' : '✘ ') + r.msg;
+      if (!r.pass && r.detail && r.detail.length) {
+        detailHtml += '<div class="check-detail"><b>' + r.msg + '</b><br>' + r.detail.map(esc).join('<br>') + '</div>';
+      }
+    });
+    el('chk-detail').innerHTML = detailHtml;
+    toast('校验完成', 'ok');
+  }
+
+  // ---------------- 输出与下载 ----------------
+  function setOutputCard(stage, fileName, subText, ready) {
+    var card = el(stage + '-output');
+    if (card) card.classList.toggle('pending', !ready);
+    el(stage + '-file-title').textContent = ready ? '已生成：' + fileName : '尚未生成文件';
+    el(stage + '-file-sub').textContent = subText || '';
+    var btn = el('btn-dl-' + stage);
+    if (btn) btn.disabled = !ready;
+  }
+
+  function saveBlob(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 2000);
+  }
+
+  function downloadStage1() { return downloadOut('s1'); }
+  function downloadStage2() { return downloadOut('s2'); }
+  function downloadStage3() { return downloadOut('s3'); }
+
+  function downloadOut(stage) {
+    var out = STATE.out[stage];
+    if (!out) { toast('尚未生成文件', 'err'); return; }
+    if (out.backend) {
+      fetch(STATE.apiBase + '/api/download/' + out.id)
+        .then(function (r) {
+          if (!r.ok) throw new Error('文件已过期，请重新生成');
+          return r.blob();
+        })
+        .then(function (blob) { saveBlob(blob, out.name); toast('已开始下载：' + out.name, 'ok'); })
+        .catch(function (e) { toast(e.message, 'err'); });
+    } else {
+      saveBlob(new Blob([out.buf], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      }), out.name);
+      toast('已开始下载：' + out.name, 'ok');
+    }
+  }
+
+  // ---------------- 站点与导航 ----------------
+  function setSite(btn, site) {
+    STATE.site = site;
+    var btns = document.querySelectorAll('.site-pill-btn');
+    Array.prototype.forEach.call(btns, function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    var limit = SITE_META[site].limit;
+    el('site-rule-desc').innerHTML = SITE_META[site].label + ' (' + site.toUpperCase() + ') 补货上限 <b>'
+      + limit + ' 天销量</b>'
+      + (site === 'ph' ? '（模板无 75 天列）' : '')
+      + '。按箱规整箱试算；命中拦截词的备注整行留空；无箱规的 SKU 留空。';
+  }
+
+  function switchCapsule(idx) {
+    for (var i = 1; i <= 4; i++) {
+      var cap = el('cap-' + i), view = el('view-' + i);
+      if (!cap || !view) continue;
+      cap.classList.toggle('active', i === idx);
+      view.style.display = (i === idx) ? 'block' : 'none';
+    }
+  }
+
+  // ---------------- 启动 ----------------
+  function boot() {
+    el('date-input').value = todayDate();
+    bindInputs();
+    setSite(document.querySelector('.site-pill-btn'), 'my');
+    el('date-input').addEventListener('change', function () {
+      el('date-input').value = batchDate();
+    });
+
+    if (typeof XLSX === 'undefined') {
+      el('mode-badge').className = 'mode-badge probing';
+      el('mode-badge').textContent = 'SheetJS 未加载，仅可用后端引擎';
+    }
+
+    probeBackend().then(function (hit) {
+      if (hit) {
+        STATE.mode = 'backend';
+        STATE.apiBase = hit.base;
+        STATE.health = hit.health;
+        applyModeUI();
+        return refreshBoxSpec();
+      }
+      STATE.mode = 'browser';
+      applyModeUI();
+      return refreshBoxSpec();
+    }).catch(function () {
+      STATE.mode = 'browser';
+      applyModeUI();
+      return refreshBoxSpec();
+    });
+  }
+
+  window.pickFile = pickFile;
+  window.setSite = setSite;
+  window.switchCapsule = switchCapsule;
+  window.runStage1 = runStage1;
+  window.runStage2 = runStage2;
+  window.runStage3 = runStage3;
+  window.runStage4 = runStage4;
+  window.downloadStage1 = downloadStage1;
+  window.downloadStage2 = downloadStage2;
+  window.downloadStage3 = downloadStage3;
+  window.handleBoxSpecUpload = handleBoxSpecUpload;
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>

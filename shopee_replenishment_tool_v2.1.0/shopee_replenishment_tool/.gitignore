@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary / test Excel files
+test_*.xlsx
+~$*.xlsx
+
+# 本地服务运行时目录（上传临时文件、生成结果、用户自定义箱规）
+_runtime/
+
+# 自动化测试生成物
+tests/fixtures/
+tests/.build/
+
+# OS generated files
+.DS_Store
+Thumbs.db
