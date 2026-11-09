@@ -203,6 +203,69 @@ def api_stage1(payload):
     }
 
 
+def api_stage1_batch(payload):
+    """阶段一（批量）：一次上传 3 国家 × (库存/销量/销售速度) 共 9 个文件，输出一个文件，
+    含 日期+国家 命名的 sheet（如 11.9my / 11.9th / 11.9ph）。"""
+    date = date_of(payload)
+    out_dir = run_dir("stage1_batch")
+    engine = load_engine()
+
+    base = decode_upload(payload.get("base"), out_dir, "官方仓补货模板.xlsx")
+    if not base:
+        default_tpl = os.path.join(HERE, "官方仓补货模板.xlsx")
+        if os.path.exists(default_tpl):
+            base = default_tpl
+    if not base:
+        return {"ok": False, "error": "缺少补货底表（官方仓补货模板）"}
+
+    country_inputs, missing, matched = {}, [], {}
+    for site in ("my", "th", "ph"):
+        group = payload.get(site) or {}
+        inv = decode_upload(group.get("inv"), out_dir, "%s库存导出表.xlsx" % site)
+        sales = decode_upload(group.get("sales"), out_dir, "%s销量导出表.xlsx" % site)
+        rpa = decode_upload(group.get("rpa"), out_dir, "%s销售速度表.xlsx" % site)
+        if not (inv and sales and rpa):
+            missing.append(site)
+            continue
+        sales_map = engine.load_sales_data(sales, sheet_name="%s销量" % site)
+        inv_map = engine.load_shopee_inventory(inv, sheet_name="%s库存" % site)
+        rpa_map = engine.load_rpa_inventory(rpa)
+        country_inputs[site] = {"sales_map": sales_map, "inv_map": inv_map, "rpa_map": rpa_map}
+        matched[site] = {"sales": len(sales_map), "inventory": len(inv_map), "speed": len(rpa_map)}
+
+    if not country_inputs:
+        return {"ok": False, "error": "未检测到任何国家的完整 3 个文件（库存/销量/销售速度）"}
+
+    out_path = os.path.join(out_dir, "官方仓补货总表_%s.xlsx" % date)
+    out_path, results, sheets = engine.process_stage1_batch(
+        base_workbook_path=base,
+        output_workbook_path=out_path,
+        date=date,
+        country_inputs=country_inputs,
+    )
+    summary = {}
+    previews = {}
+    for site, preview in results.items():
+        summary[site] = {"sheet": sheets[site], "stats": count_stats(preview), "rows": len(preview)}
+        previews[site] = preview
+
+    warnings = []
+    if missing:
+        warnings.append("以下国家未上传完整 3 个文件，已跳过：%s" % "、".join(s.upper() for s in missing))
+    if not engine.box_specs:
+        warnings.append("箱规库为空，无箱规的 SKU 将按需补量计算")
+
+    return {
+        "ok": True,
+        "sheets": sheets,
+        "summary": summary,
+        "previews": previews,
+        "matched": matched,
+        "warnings": warnings,
+        "file": register_file(out_path, "官方仓补货总表_%s.xlsx" % date),
+    }
+
+
 def api_stage2(payload):
     site = site_of(payload)
     date = date_of(payload)
@@ -250,6 +313,77 @@ def api_stage3(payload):
         "preview": preview,
         "file": register_file(out_path, os.path.basename(out_path)),
     }
+
+
+def api_stage2_batch(payload):
+    """阶段二（批量）：1 个含 3 国家 sheet 的已审批总表 + 3 个国家入库申请模板 -> 输出 3 个填写后的申请表。"""
+    date = date_of(payload)
+    out_dir = run_dir("stage2_batch")
+    engine = load_engine()
+
+    rep = decode_upload(payload.get("rep"), out_dir, "已审批补货总表.xlsx")
+    if not rep:
+        return {"ok": False, "error": "缺少已审批补货总表（含3国家sheet）"}
+
+    results, missing = {}, []
+    for site in ("my", "th", "ph"):
+        tpl = decode_upload((payload.get(site) or {}).get("inb"), out_dir, "%s入库申请模板.xlsx" % site)
+        if not tpl:
+            missing.append(site)
+            continue
+        out_path = os.path.join(out_dir, "%s%s_入库申请填写表_已填充.xlsx" % (date, site))
+        out_path, filled, preview = engine.process_stage2_inbound(rep, tpl, site, out_path)
+        results[site] = {
+            "filled": filled,
+            "preview": preview,
+            "file": register_file(out_path, os.path.basename(out_path)),
+        }
+
+    if not results:
+        return {"ok": False, "error": "未检测到任何国家的入库申请模板"}
+    warnings = []
+    if missing:
+        warnings.append("以下国家缺少入库申请模板，已跳过：%s" % "、".join(s.upper() for s in missing))
+    return {"ok": True, "results": results, "warnings": warnings}
+
+
+def api_stage3_batch(payload):
+    """阶段三（批量）：1 个汇总补货总表（含3国家sheet）+ 3 个 Shopee 打包模板 -> 输出 3 个填写后的表。"""
+    date = date_of(payload)
+    out_dir = run_dir("stage3_batch")
+    engine = load_engine()
+
+    summary = decode_upload(payload.get("summary"), out_dir, "汇总补货表.xlsx")
+    if not summary:
+        return {"ok": False, "error": "缺少汇总补货表（含3国家sheet）"}
+
+    results, missing = {}, []
+    for site in ("my", "th", "ph"):
+        pack = decode_upload((payload.get(site) or {}).get("pack"), out_dir, "%s打包模板.xlsx" % site)
+        if not pack:
+            missing.append(site)
+            continue
+        out_path = os.path.join(out_dir, "%s虾皮%s_已打包.xlsx" % (date, SITE_NAMES[site]))
+        out_path, groups, max_box, preview = engine.process_stage3_packing(
+            summary_replenish_path=summary,
+            shopee_packing_template_path=pack,
+            site_code=site,
+            output_path=out_path,
+            return_preview=True,
+        )
+        results[site] = {
+            "groups": groups,
+            "max_box": max_box,
+            "preview": preview,
+            "file": register_file(out_path, os.path.basename(out_path)),
+        }
+
+    if not results:
+        return {"ok": False, "error": "未检测到任何国家的打包模板"}
+    warnings = []
+    if missing:
+        warnings.append("以下国家缺少打包模板，已跳过：%s" % "、".join(s.upper() for s in missing))
+    return {"ok": True, "results": results, "warnings": warnings}
 
 
 def api_validate(payload):
@@ -335,6 +469,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         routes = {
             "/api/stage1": api_stage1,
+            "/api/stage1_batch": api_stage1_batch,
+            "/api/stage2_batch": api_stage2_batch,
+            "/api/stage3_batch": api_stage3_batch,
             "/api/stage2": api_stage2,
             "/api/stage3": api_stage3,
             "/api/validate": api_validate,

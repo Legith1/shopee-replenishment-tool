@@ -39,6 +39,8 @@ def safe_load_workbook(file_path, *args, **kwargs):
                     data = zin.read(item.filename)
                     if item.filename == 'xl/styles.xml':
                         txt = data.decode('utf-8', errors='ignore')
+                        # 去掉样式值中的换行/空格（如 style="mediumDashed\r\n"），并移除空值与 none
+                        txt = re.sub(r'style="([^"]*)"', lambda m: 'style="%s"' % m.group(1).strip(), txt)
                         txt = re.sub(r'\s+style="(?:none|)"', '', txt)
                         data = txt.encode('utf-8')
                     zout.writestr(item, data)
@@ -207,7 +209,7 @@ class ReplenishmentEngine:
         wb = safe_load_workbook(inventory_file, data_only=True)
         ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
 
-        header_row, wh_sku_col, available_col, transit_col = 1, None, None, None
+        header_row, wh_sku_col, available_col, transit_col, speed_col = 1, None, None, None, None
         for r in range(1, min(6, ws.max_row + 1)):
             for c in range(1, ws.max_column + 1):
                 val = str(ws.cell(r, c).value or '').strip()
@@ -217,6 +219,8 @@ class ReplenishmentEngine:
                     available_col = c
                 elif val in ['待处理的IR已到达', '在途', '待入库', 'In Transit']:
                     transit_col = c
+                elif val in ['销售速度', 'Sales Velocity']:
+                    speed_col = c
             if wh_sku_col and available_col:
                 break
 
@@ -227,6 +231,7 @@ class ReplenishmentEngine:
                 if wh_sku:
                     raw_avail = ws.cell(r, available_col).value if available_col else 0
                     raw_transit = ws.cell(r, transit_col).value if transit_col else 0
+                    raw_speed = ws.cell(r, speed_col).value if speed_col else None
                     try:
                         avail_val = float(raw_avail) if raw_avail is not None else 0.0
                     except:
@@ -235,7 +240,12 @@ class ReplenishmentEngine:
                         transit_val = float(raw_transit) if raw_transit is not None else 0.0
                     except:
                         transit_val = 0.0
-                    inv_map[wh_sku] = {'in_warehouse': avail_val, 'in_transit': transit_val}
+                    try:
+                        speed_val = float(raw_speed) if raw_speed is not None else None
+                    except:
+                        speed_val = None
+                    # speed 为 RPA 销售速度（来自库存导出表的「销售速度」列），缺失时为 None
+                    inv_map[wh_sku] = {'in_warehouse': avail_val, 'in_transit': transit_val, 'speed': speed_val}
         return inv_map
 
     def load_rpa_inventory(self, rpa_file):
@@ -266,8 +276,20 @@ class ReplenishmentEngine:
                     rpa_map[wh_sku] = speed_val
         return rpa_map
 
-    #: 备注拦截关键词（命中任一即整行留空，不参与补货测算）
+    #: 备注拦截关键词（命中任一即整行返 0，优先级 1）
     INTERCEPT_KEYWORDS = ['停', '不补', '超100cm', '超100', '超长', '下架', '停产', '无库存', '无货', 'dw不补']
+
+    #: 小配件关键词（优先级 2：覆盖箱规，按 10 的倍数向上取整）
+    SMALL_ACCESSORY_KEYWORDS = [
+        'overcast鱼线', 'overcast', 'SEASIR帽子', 'SEASIR 帽子', '帽子',
+        'X8黑蜘蛛', '黑蜘蛛',
+        '红公牛150米PE线', 'PE线',
+        '软饵曲柄钩套盒', '曲柄钩套盒',
+        '润滑油脂套装', '润滑油脂套装新版',
+        '双层饵盒', '碳素摇臂', 'Bull Max鱼线', 'Bull Max', '抄网',
+        '铅头钩双层饵盒76件套装', '钓鱼指甲刀', '钓鱼伸缩扣防水路亚包', '小号双层饵盒',
+    ]
+    SMALL_ACCESSORY_STEP = 10
 
     # 状态枚举：filled=已测算 / intercepted=备注拦截 / no_boxspec=无箱规 / no_demand=无需补货
     STATUS_FILLED = 'filled'
@@ -275,46 +297,43 @@ class ReplenishmentEngine:
     STATUS_NO_BOXSPEC = 'no_boxspec'
     STATUS_NO_DEMAND = 'no_demand'
 
-    def evaluate_row(self, sku, cz_replenish, max_limit_val, remark, box_specs=None):
-        """需补量测算的唯一实现。
+    @classmethod
+    def is_small_accessory(cls, name):
+        if not name:
+            return False
+        s = str(name).lower()
+        return any(k.lower() in s for k in cls.SMALL_ACCESSORY_KEYWORDS)
+
+    def evaluate_row(self, sku, cz_replenish, max_limit_val, remark, box_specs=None, product_name=None):
+        """补货测算唯一实现（按优先级从上到下执行）。
 
         返回 (need_qty, status, reason)：
-        - need_qty: int 或 None（None 表示该行留空）
+        - need_qty: int 或 None（None 表示按规则不补，单元格留空）
         - status:   filled / intercepted / no_boxspec / no_demand
-        - reason:   人可读的中文原因，用于前端预览与复核
+        - reason:   人可读中文原因
 
-        测算顺序严格遵循业务规则：
-        1) 备注命中拦截词 -> 留空
-        2) 充足补货量 <= 0 -> 留空
-        3) 箱规缺失或箱数<=0 -> 留空
-        4) 按箱规整箱试算：boxes = round(cz / 箱规)（Python round，银行家舍入）
-        5) 若整箱结果超出站点上限：箱数-1 仍达标则退一箱，否则退到 min(round(cz), floor(上限))
+        优先级：
+        1) 硬性拦截：备注命中停产/不补/超长/dw不补了/cast鱼竿都不补了等 -> 返 0
+        2) 小配件：命中小配件关键词 -> 覆盖箱规，按 10 的倍数向上取整（需补量）
+        3) 核心双轨：
+           - cz_replenish = max(充足补货量, 60天缺口)
+           - 若有箱规：按箱规整箱向上取整 ceil(cz / 箱规) * 箱规（可略大于充足量或60天）
+             且不超过 75 天上限（max_limit_val）
+           - 若无箱规：按需补量（round(cz)）
         """
         specs = self.box_specs if box_specs is None else box_specs
 
+        # ---- 优先级 1：硬性拦截 ----
         if remark is not None and str(remark).strip() != '':
             rem_str = str(remark).strip()
             for kw in self.INTERCEPT_KEYWORDS:
                 if kw in rem_str:
-                    return None, self.STATUS_INTERCEPTED, '备注命中拦截词「%s」，整行留空' % kw
+                    return 0, self.STATUS_INTERCEPTED, '备注命中拦截词「%s」，按规则返 0' % kw
 
         if cz_replenish is None or cz_replenish <= 0:
-            return None, self.STATUS_NO_DEMAND, '充足补货量≤0，无需补货'
+            return None, self.STATUS_NO_DEMAND, '充足补货量与60天缺口均≤0，无需补货'
 
-        sku_clean = self.clean_key(sku)
-        box_info = specs.get(sku_clean)
-        if not box_info or not box_info.get('qty'):
-            return None, self.STATUS_NO_BOXSPEC, '箱规库无此 SKU 或未维护整箱数量'
-
-        box_qty = box_info['qty']
-        if box_qty <= 0:
-            return None, self.STATUS_NO_BOXSPEC, '箱规整箱数量无效（≤0）'
-
-        boxes = round(cz_replenish / box_qty)
-        if boxes == 0 and cz_replenish >= (0.5 * box_qty):
-            boxes = 1
-
-        candidate = boxes * box_qty
+        # 75 天为硬上限（来自 max_limit_val = 75天缺口）
         limit = None
         if max_limit_val is not None and not isinstance(max_limit_val, str):
             try:
@@ -322,31 +341,59 @@ class ReplenishmentEngine:
                     limit = float(max_limit_val)
             except (TypeError, ValueError):
                 limit = None
+        if limit is not None and limit <= 0:
+            return None, self.STATUS_NO_DEMAND, '75天缺口≤0，无需补货（硬上限）'
 
-        capped = False
-        if limit is not None and limit > 0:
-            if candidate > limit:
-                capped = True
-                if boxes > 1 and ((boxes - 1) * box_qty) <= limit:
-                    candidate = (boxes - 1) * box_qty
-                else:
-                    candidate = min(round(cz_replenish), math.floor(limit))
+        # ---- 优先级 2：小配件 10 倍数向上取整（覆盖箱规）----
+        if self.is_small_accessory(product_name):
+            step = self.SMALL_ACCESSORY_STEP
+            need = int(math.ceil(cz_replenish / step) * step)
+            if limit is not None and need > limit:
+                need = int(math.floor(limit / step) * step)  # 75 天硬上限
+            if need <= 0:
+                return None, self.STATUS_NO_DEMAND, '小配件受 75 天硬上限约束，无需补货'
+            return need, self.STATUS_FILLED, '小配件按 10 的倍数向上取整：%d 件' % need
 
-        if candidate <= 0:
-            return None, self.STATUS_NO_DEMAND, '整箱试算结果≤0，无需补货'
+        # ---- 优先级 3：核心双轨 ----
+        sku_clean = self.clean_key(sku)
+        box_info = specs.get(sku_clean)
+        box_qty = box_info.get('qty') if box_info else None
 
-        need_qty = int(round(candidate))
-        if capped:
-            reason = '整箱试算 %d 件超出站点上限 %.0f 件，已按上限平滑为 %d 件（箱规 %d）' % (
-                int(boxes * box_qty), limit, need_qty, box_qty)
+        if not box_qty or box_qty <= 0:
+            # 无箱规：按 max(充足补货量, 60天缺口) 的需补量，受 75 天硬上限约束
+            need = int(math.ceil(cz_replenish))
+            if limit is not None and need > limit:
+                need = int(math.floor(limit))
+            if need <= 0:
+                return None, self.STATUS_NO_DEMAND, '按需补量受 75 天硬上限约束，无需补货'
+            return need, self.STATUS_FILLED, '箱规库无此 SKU，按需补量 %d 件（75天硬上限）' % need
+
+        # 有箱规（规则 C）：
+        #   cz >= 箱规 -> 按整箱向上取整 ceil(cz / 箱规) * 箱规
+        #   cz <  箱规 -> 按件数向上取整 ceil(cz)
+        # 75 天为硬上限：超过则直接封顶为 floor(75天缺口)，不做退箱
+        if cz_replenish >= box_qty:
+            need = int(math.ceil(cz_replenish / box_qty) * box_qty)
+            basis = '整箱'
         else:
-            reason = '整箱试算 %d 箱 × %d 件/箱 = %d 件' % (int(boxes), box_qty, need_qty)
-        return need_qty, self.STATUS_FILLED, reason
+            need = int(math.ceil(cz_replenish))
+            basis = '按件数'
+        capped = False
+        if limit is not None and need > limit:
+            capped = True
+            need = int(math.floor(limit))
+        if need <= 0:
+            return None, self.STATUS_NO_DEMAND, '受 75 天硬上限约束，无需补货'
+        reason = '按%s：箱规 %d 件/箱，需补 %d 件%s' % (
+            basis, box_qty, need, '（已受 75 天硬上限封顶）' if capped else '')
+        return need, self.STATUS_FILLED, reason
+
 
     def calculate_replenishment_quantity(self, sku, cz_replenish, max_limit_val, remark):
         """智能需补量计算（保留原签名，内部统一走 evaluate_row）"""
         need, _status, _reason = self.evaluate_row(sku, cz_replenish, max_limit_val, remark)
         return need
+
 
     def process_stage1_replenish(self, base_workbook_path, template_sheet_name, output_workbook_path, new_sheet_name, sales_map, inv_map, rpa_map, site_code='my'):
         """阶段一：生成官方仓补货总表并写入公式与条件格式"""
@@ -393,6 +440,7 @@ class ReplenishmentEngine:
             sku_val = self.clean_key(ws_new.cell(r, sku_col).value)
             wh_sku_val = self.clean_key(ws_new.cell(r, wh_sku_col).value)
             remark_val = ws_new.cell(r, remark_col).value
+            sku_name_val = ws_new.cell(r, sku_col).value
             name_val = ws_new.cell(r, 1).value
 
             if not sku_val and not wh_sku_val:
@@ -407,6 +455,7 @@ class ReplenishmentEngine:
             ws_new.cell(r, in_wh_col).value = int(in_wh) if in_wh.is_integer() else in_wh
             ws_new.cell(r, in_transit_col).value = int(in_transit) if in_transit.is_integer() else in_transit
 
+            # 销售速度只使用当前在用的「销售速度」数据（销售速度表），不使用库存导出表的销售速度列
             speed_val = rpa_map.get(wh_sku_val, 0.0)
             ws_new.cell(r, speed_col).value = round(speed_val, 2)
 
@@ -414,13 +463,21 @@ class ReplenishmentEngine:
             # 之前用 =E+F / =2*D 覆盖会导致空白行显示 0，破坏模板的 ISBLANK 保护。
 
             cur_total = in_wh + in_transit
-            cur_cz = (sales_val * 2) - cur_total
+            # 60/75 天缺口基于 RPA 销售速度（库存导出表「销售速度」列 / 销售速度表）
             cur_d60 = (60.0 * speed_val) - cur_total
-            cur_d75 = (75.0 * speed_val) - cur_total if site_lower != 'ph' else None
-            max_limit = cur_d60 if site_lower == 'ph' else cur_d75
+            cur_d75 = (75.0 * speed_val) - cur_total
+            # 充足补货量（30天销量×2 - 库存）仅作对比参考，核心取 max(充足补货量, 60天缺口)
+            cur_cz_30 = (sales_val * 2) - cur_total
+            cur_cz = max(cur_cz_30, cur_d60)
+            max_limit = cur_d75
 
-            need_qty, status, reason = self.evaluate_row(
-                sku=sku_val, cz_replenish=cur_cz, max_limit_val=max_limit, remark=remark_val)
+            # 零速度行：按规则留空（不参与测算）
+            if speed_val <= 0:
+                need_qty, status, reason = None, self.STATUS_NO_DEMAND, '销售速度为0，留空'
+            else:
+                need_qty, status, reason = self.evaluate_row(
+                    sku=sku_val, cz_replenish=cur_cz, max_limit_val=max_limit, remark=remark_val,
+                    product_name=' '.join(str(x) for x in (sku_name_val, name_val) if x))
             ws_new.cell(r, need_col).value = need_qty if need_qty is not None else None
 
             spec = self.box_specs.get(sku_val)
@@ -448,6 +505,109 @@ class ReplenishmentEngine:
         wb._sheets = [ws_new] + [s for s in wb._sheets if s != ws_new]
         wb.save(output_workbook_path)
         return output_workbook_path, preview_rows
+
+    def process_stage1_batch(self, base_workbook_path, output_workbook_path, date, country_inputs):
+        """阶段一（多国家）：一次输入 3 国家 × 库存/销量/销售速度，输出一个文件。
+
+        country_inputs: {site_code: {'sales_map': {...}, 'inv_map': {...}, 'rpa_map': {...}}}
+        每个国家生成一个 sheet，名称为 「日期+站点」（如 11.9my / 11.9th / 11.9ph）。
+        返回 (output_path, {site: preview_rows}, {site: sheet_name})。
+        """
+        wb = safe_load_workbook(base_workbook_path)
+        results, sheets = {}, {}
+        for site in ['my', 'th', 'ph']:
+            if site not in country_inputs:
+                continue
+            data = country_inputs[site]
+            sheet_name = '%s%s' % (date, site)
+            template = self.resolve_sheet(wb, site, '%s补货模板' % site)
+            ws_template = wb[template]
+            if sheet_name in wb.sheetnames:
+                wb.remove(wb[sheet_name])
+            ws_new = wb.copy_worksheet(ws_template)
+            ws_new.title = sheet_name
+            for cf in ws_template.conditional_formatting._cf_rules:
+                ws_new.conditional_formatting._cf_rules[cf] = copy.deepcopy(ws_template.conditional_formatting._cf_rules[cf])
+            results[site] = self._fill_stage1_sheet(ws_new, site, data['sales_map'], data['inv_map'], data['rpa_map'])
+            sheets[site] = sheet_name
+
+        # 去掉原始模板表以外的旧同名表，把本批次 sheet 放在最前
+        ordered = [wb[s] for s in sheets.values()]
+        others = [s for s in wb._sheets if s not in ordered]
+        wb._sheets = ordered + others
+        wb.save(output_workbook_path)
+        return output_workbook_path, results, sheets
+
+    def _fill_stage1_sheet(self, ws_new, site_code, sales_map, inv_map, rpa_map):
+        """对单个站点 sheet 执行阶段一测算（与 process_stage1_replenish 同一规则）。"""
+        site_lower = site_code.lower()
+        header_row = 1
+        headers = {str(ws_new.cell(header_row, c).value or '').strip(): c for c in range(1, ws_new.max_column + 1)}
+        sku_col = headers.get('SKU', 2)
+        wh_sku_col = headers.get('仓库SKU ID', 3)
+        sales_col = headers.get('30天销量', 4)
+        in_wh_col = headers.get('在仓', 5)
+        in_transit_col = headers.get('在途', 6)
+        need_col = next((c for h, c in headers.items() if '需补' in h), 11)
+        speed_col = headers.get('销售速度', 13)
+        d60_col = headers.get('60天', 14)
+        d75_col = headers.get('75天', 15) if site_lower != 'ph' else None
+        remark_col = headers.get('备注', 15 if site_lower == 'ph' else 16)
+        box_qty_col = headers.get('数量')
+        preview_rows = []
+
+        for r in range(header_row + 1, ws_new.max_row + 1):
+            sku_val = self.clean_key(ws_new.cell(r, sku_col).value)
+            wh_sku_val = self.clean_key(ws_new.cell(r, wh_sku_col).value)
+            remark_val = ws_new.cell(r, remark_col).value
+            name_val = ws_new.cell(r, 1).value
+            sku_name_val = ws_new.cell(r, sku_col).value
+            if not sku_val and not wh_sku_val:
+                continue
+
+            sales_val = sales_map.get(sku_val, 0.0)
+            ws_new.cell(r, sales_col).value = int(sales_val) if float(sales_val).is_integer() else sales_val
+            inv_data = inv_map.get(wh_sku_val, {'in_warehouse': 0.0, 'in_transit': 0.0})
+            in_wh = inv_data['in_warehouse']
+            in_transit = inv_data['in_transit']
+            ws_new.cell(r, in_wh_col).value = int(in_wh) if float(in_wh).is_integer() else in_wh
+            ws_new.cell(r, in_transit_col).value = int(in_transit) if float(in_transit).is_integer() else in_transit
+
+            # 销售速度只使用当前在用的「销售速度表」数据
+            speed_val = rpa_map.get(wh_sku_val, 0.0)
+            ws_new.cell(r, speed_col).value = round(speed_val, 2)
+
+            cur_total = in_wh + in_transit
+            cur_d60 = (60.0 * speed_val) - cur_total
+            cur_d75 = (75.0 * speed_val) - cur_total
+            cur_cz = max((sales_val * 2) - cur_total, cur_d60)
+
+            if speed_val <= 0:
+                need_qty, status, reason = None, self.STATUS_NO_DEMAND, '销售速度为0，留空'
+            else:
+                need_qty, status, reason = self.evaluate_row(
+                    sku=sku_val, cz_replenish=cur_cz, max_limit_val=cur_d75, remark=remark_val,
+                    product_name=' '.join(str(x) for x in (sku_name_val, name_val) if x))
+            ws_new.cell(r, need_col).value = need_qty if need_qty is not None else None
+
+            spec = self.box_specs.get(sku_val)
+            box_qty_val = spec.get('qty') if spec else None
+            if box_qty_col:
+                ws_new.cell(r, box_qty_col).value = box_qty_val if box_qty_val else None
+
+            days_avail = round(in_wh / (sales_val / 30.0), 1) if sales_val > 0 else None
+            preview_rows.append({
+                'row': r, 'name': name_val, 'sku': sku_val, 'wh_sku': wh_sku_val,
+                'sales': sales_val, 'in_wh': in_wh, 'in_transit': in_transit,
+                'total': cur_total, 'days': days_avail, 'cz': round(cur_cz, 4),
+                'need': need_qty if need_qty is not None else '',
+                'status': status, 'reason': reason,
+                'box_qty': box_qty_val if box_qty_val else None,
+                'speed': speed_val, 'd60': round(cur_d60, 4),
+                'd75': round(cur_d75, 4) if cur_d75 is not None else None,
+                'remark': remark_val
+            })
+        return preview_rows
 
     # =========================================================================
     # 阶段二：生成 Shopee 入库申请表核心逻辑
