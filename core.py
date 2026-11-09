@@ -8,12 +8,51 @@ Shopee Official Warehouse Full-Stage Replenishment Engine (虾皮官方仓全流
 数据校验：SKU字典对齐校验、装箱闭环平衡校验、单箱重量尺寸安全校验
 """
 
+import io
 import os
 import re
 import copy
 import math
+import zipfile
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+_ORIG_LOAD_WORKBOOK = openpyxl.load_workbook
+_MINIMAL_STYLES_XML = (
+    b'<?xml version="1.0" encoding="UTF-8"?>'
+    b'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"></styleSheet>'
+)
+
+
+def safe_load_workbook(file_path, *args, **kwargs):
+    """兼容 Shopee / ERP 导出 Excel 含非法 styles.xml（如 border style="" 或 style="none"）的安全加载器"""
+    try:
+        return _ORIG_LOAD_WORKBOOK(file_path, *args, **kwargs)
+    except Exception:
+        if not isinstance(file_path, (str, os.PathLike)) or not os.path.exists(file_path):
+            raise
+        # 第一级修复：清洗 xl/styles.xml 中的非法 border style="" / style="none" 属性
+        try:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(file_path, 'r') as zin, zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = zin.read(item.filename)
+                    if item.filename == 'xl/styles.xml':
+                        txt = data.decode('utf-8', errors='ignore')
+                        txt = re.sub(r'\s+style="(?:none|)"', '', txt)
+                        data = txt.encode('utf-8')
+                    zout.writestr(item, data)
+            buf.seek(0)
+            return _ORIG_LOAD_WORKBOOK(buf, *args, **kwargs)
+        except Exception:
+            # 第二级兜底：替换为极简合法的 xl/styles.xml，确保数据读写不中断
+            buf2 = io.BytesIO()
+            with zipfile.ZipFile(file_path, 'r') as zin, zipfile.ZipFile(buf2, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = _MINIMAL_STYLES_XML if item.filename == 'xl/styles.xml' else zin.read(item.filename)
+                    zout.writestr(item, data)
+            buf2.seek(0)
+            return _ORIG_LOAD_WORKBOOK(buf2, *args, **kwargs)
 
 class ReplenishmentEngine:
     def __init__(self, box_spec_path=None):
@@ -25,7 +64,7 @@ class ReplenishmentEngine:
     def load_box_specs(self, file_path):
         """加载补货箱规表（包含装量与长宽高重）"""
         self.box_spec_path = file_path
-        wb = openpyxl.load_workbook(file_path, data_only=True)
+        wb = safe_load_workbook(file_path, data_only=True)
         ws = wb.active
         self.box_specs = {}
 
@@ -124,7 +163,7 @@ class ReplenishmentEngine:
     # =========================================================================
     def load_sales_data(self, sales_file, sheet_name=None):
         """加载马帮销量表（匹配 SKU -> 销售数量）"""
-        wb = openpyxl.load_workbook(sales_file, data_only=True)
+        wb = safe_load_workbook(sales_file, data_only=True)
         ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
 
         header_row, sku_col, sales_col = 1, None, None
@@ -165,7 +204,7 @@ class ReplenishmentEngine:
 
     def load_shopee_inventory(self, inventory_file, sheet_name=None):
         """加载Shopee官方仓库存表（匹配 仓库SKU ID -> 在仓可售数量 / 在途待处理IR）"""
-        wb = openpyxl.load_workbook(inventory_file, data_only=True)
+        wb = safe_load_workbook(inventory_file, data_only=True)
         ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
 
         header_row, wh_sku_col, available_col, transit_col = 1, None, None, None
@@ -201,7 +240,7 @@ class ReplenishmentEngine:
 
     def load_rpa_inventory(self, rpa_file):
         """加载RPA导出的销售速度表"""
-        wb = openpyxl.load_workbook(rpa_file, data_only=True)
+        wb = safe_load_workbook(rpa_file, data_only=True)
         ws = wb.active
         header_row, wh_sku_col, speed_col = 1, None, None
         for r in range(1, min(6, ws.max_row + 1)):
@@ -311,7 +350,7 @@ class ReplenishmentEngine:
 
     def process_stage1_replenish(self, base_workbook_path, template_sheet_name, output_workbook_path, new_sheet_name, sales_map, inv_map, rpa_map, site_code='my'):
         """阶段一：生成官方仓补货总表并写入公式与条件格式"""
-        wb = openpyxl.load_workbook(base_workbook_path)
+        wb = safe_load_workbook(base_workbook_path)
         site_lower = site_code.lower()
 
         template_sheet_name = self.resolve_sheet(wb, site_code, template_sheet_name)
@@ -415,7 +454,7 @@ class ReplenishmentEngine:
     # =========================================================================
     def process_stage2_inbound(self, approved_master_path, inbound_template_path, site_code, output_path):
         """阶段二：根据审批完的补货总表生成入库申请表"""
-        wb_rep = openpyxl.load_workbook(approved_master_path, data_only=True)
+        wb_rep = safe_load_workbook(approved_master_path, data_only=True)
         # 优先取“批次数据表”（如 11.7my），排除 *_补货模板 之类的空白模板表
         names = list(wb_rep.sheetnames)
         aliases = self.SITE_SHEET_ALIASES.get(str(site_code).lower(), [])
@@ -440,7 +479,7 @@ class ReplenishmentEngine:
                     'export_val': export_val
                 }
 
-        wb_inb = openpyxl.load_workbook(inbound_template_path)
+        wb_inb = safe_load_workbook(inbound_template_path)
         ws_inb = wb_inb.active
 
         filled_rows = 0
@@ -497,7 +536,7 @@ class ReplenishmentEngine:
         return_preview=True 时额外返回逐行装箱预览（供 Web UI 使用），
         默认返回 3 元组以兼容既有桌面版调用。
         """
-        wb_sum = openpyxl.load_workbook(summary_replenish_path, data_only=True)
+        wb_sum = safe_load_workbook(summary_replenish_path, data_only=True)
         site_name_map = {'my': '马来', 'th': '泰国', 'ph': '菲律宾'}
         target_sheet_name = site_name_map.get(site_code.lower(), site_code)
         
@@ -557,7 +596,7 @@ class ReplenishmentEngine:
                     box_sku_map[b_idx].append((sku_clean, qty_per_box))
 
         # 写入 Shopee 官方打包模板
-        wb_pack = openpyxl.load_workbook(shopee_packing_template_path)
+        wb_pack = safe_load_workbook(shopee_packing_template_path)
         ws_qty = wb_pack['已打包数量'] if '已打包数量' in wb_pack.sheetnames else wb_pack.active
         ws_dim = wb_pack['尺寸和重量'] if '尺寸和重量' in wb_pack.sheetnames else None
 
@@ -718,7 +757,7 @@ class ReplenishmentEngine:
         sku_unknown, sku_total = [], 0
         if master_path and os.path.exists(master_path):
             try:
-                wb = openpyxl.load_workbook(master_path, data_only=True)
+                wb = safe_load_workbook(master_path, data_only=True)
                 ws = wb[self.resolve_sheet(wb, site_code)]
                 headers = {str(ws.cell(1, c).value or '').strip(): c for c in range(1, ws.max_column + 1)}
                 col_sku = headers.get('SKU', 2)
@@ -750,7 +789,7 @@ class ReplenishmentEngine:
         # ---- 2. 装箱闭环平衡 ----
         if packing_path and os.path.exists(packing_path):
             try:
-                wb_p = openpyxl.load_workbook(packing_path, data_only=True)
+                wb_p = safe_load_workbook(packing_path, data_only=True)
                 ws_p = wb_p['已打包数量'] if '已打包数量' in wb_p.sheetnames else wb_p.active
                 box_start, total_col, approved_col = None, None, None
                 for c in range(1, ws_p.max_column + 1):
