@@ -161,8 +161,9 @@ class ShopeeReplenishApp:
         grid_frame.columnconfigure(1, weight=1)
 
         self.v1_base_var = tk.StringVar(value=self.default_base_file if os.path.exists(self.default_base_file) else "")
-        self.v1_sales_var = tk.StringVar(value=self.default_base_file if os.path.exists(self.default_base_file) else "")
-        self.v1_inv_var = tk.StringVar(value=self.default_base_file if os.path.exists(self.default_base_file) else "")
+        # 注意：销量表/库存表不能用模板文件做默认值，否则会把模板当数据源读取
+        self.v1_sales_var = tk.StringVar(value="")
+        self.v1_inv_var = tk.StringVar(value="")
         self.v1_rpa_var = tk.StringVar(value=self.default_rpa_file if os.path.exists(self.default_rpa_file) else "")
 
         self.create_dnd_box(grid_frame, 0, 0, "📑 1. 官方仓补货底表 / 模板", "官方仓补货总表_新.xlsx 或 模板表", self.v1_base_var)
@@ -536,10 +537,15 @@ class ShopeeReplenishApp:
         for item in self.v1_tree.get_children():
             self.v1_tree.delete(item)
         for row in preview:
+            days = row.get('days')
+            need = row.get('need')
+            days_txt = f"{round(days, 1)}天" if days is not None else '-'
+            need_txt = f"{int(need)}件" if need not in (None, '') else '留空'
             self.v1_tree.insert('', tk.END, values=(
                 row['name'], row['sku'], int(row['sales']), int(row['in_wh']), int(row['in_transit']),
-                int(row['total']), f"{row['days']}天", int(row['cz']), f"{row['need']}件",
-                row['speed'], round(row['d60'], 1), round(row['d75'], 1) if row['d75'] is not None else '-', row['remark'] or '-'
+                int(row['total']), days_txt, int(row['cz']), need_txt,
+                row['speed'], round(row['d60'], 1) if row['d60'] is not None else '-',
+                round(row['d75'], 1) if row['d75'] is not None else '-', row['remark'] or '-'
             ))
         self.v1_out_title.config(text=f"✅ 已成功生成：{os.path.basename(out_path)}")
         self.v1_out_path.config(text=f"路径：{out_path}")

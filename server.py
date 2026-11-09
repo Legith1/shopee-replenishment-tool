@@ -22,6 +22,7 @@
 import argparse
 import base64
 import hashlib
+import importlib
 import json
 import os
 import socket
@@ -112,7 +113,8 @@ def find_boxspec():
 
 
 def load_engine():
-    """每次请求重新构建引擎，保证箱规表替换后立即生效"""
+    """每次请求重新构建引擎并热重载 core.py，保证箱规表或规则修改后立即生效"""
+    importlib.reload(core)
     return core.ReplenishmentEngine(find_boxspec())
 
 
@@ -150,6 +152,10 @@ def api_stage1(payload):
     out_dir = run_dir("stage1_%s" % site)
 
     base = decode_upload(payload.get("base"), out_dir, "官方仓补货模板.xlsx")
+    if not base:
+        default_tpl = os.path.join(HERE, "官方仓补货模板.xlsx")
+        if os.path.exists(default_tpl):
+            base = default_tpl
     sales = decode_upload(payload.get("sales"), out_dir, "马帮销量导出表.xlsx")
     inv = decode_upload(payload.get("inv"), out_dir, "库存导出表.xlsx")
     rpa = decode_upload(payload.get("rpa"), out_dir, "销售速度.xlsx")
