@@ -466,10 +466,13 @@ class ReplenishmentEngine:
             # 60/75 天缺口基于 RPA 销售速度（库存导出表「销售速度」列 / 销售速度表）
             cur_d60 = (60.0 * speed_val) - cur_total
             cur_d75 = (75.0 * speed_val) - cur_total
+            # 菲律宾上限 60 天，马来/泰国上限 75 天（硬上限）
+            cap_days = 60.0 if site_lower == 'ph' else 75.0
+            cur_cap = (cap_days * speed_val) - cur_total
             # 充足补货量（30天销量×2 - 库存）仅作对比参考，核心取 max(充足补货量, 60天缺口)
             cur_cz_30 = (sales_val * 2) - cur_total
             cur_cz = max(cur_cz_30, cur_d60)
-            max_limit = cur_d75
+            max_limit = cur_cap
 
             # 零速度行：按规则留空（不参与测算）
             if speed_val <= 0:
@@ -580,13 +583,16 @@ class ReplenishmentEngine:
             cur_total = in_wh + in_transit
             cur_d60 = (60.0 * speed_val) - cur_total
             cur_d75 = (75.0 * speed_val) - cur_total
+            # 菲律宾上限 60 天，马来/泰国上限 75 天（硬上限）
+            cap_days = 60.0 if site_lower == 'ph' else 75.0
+            cur_cap = (cap_days * speed_val) - cur_total
             cur_cz = max((sales_val * 2) - cur_total, cur_d60)
 
             if speed_val <= 0:
                 need_qty, status, reason = None, self.STATUS_NO_DEMAND, '销售速度为0，留空'
             else:
                 need_qty, status, reason = self.evaluate_row(
-                    sku=sku_val, cz_replenish=cur_cz, max_limit_val=cur_d75, remark=remark_val,
+                    sku=sku_val, cz_replenish=cur_cz, max_limit_val=cur_cap, remark=remark_val,
                     product_name=' '.join(str(x) for x in (sku_name_val, name_val) if x))
             ws_new.cell(r, need_col).value = need_qty if need_qty is not None else None
 
