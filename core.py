@@ -60,36 +60,82 @@ class ReplenishmentEngine:
     def __init__(self, box_spec_path=None):
         self.box_spec_path = box_spec_path
         self.box_specs = {}  # {sku_clean: {'qty': int, 'length': float, 'width': float, 'height': float, 'weight': float, 'note': str}}
+        self.ext_specs = {}  # {外部sku_clean: 规范SKU}
+        self.wh_specs = {}   # {站点: {仓库SKU_clean: 规范SKU}}，my/th/ph 各自独立
         if box_spec_path and os.path.exists(box_spec_path):
             self.load_box_specs(box_spec_path)
 
+    def find_spec(self, *keys, site=None):
+        """按顺序查找箱规：先 SKU 键，再外部 SKU 键，最后按站点的仓库 SKU ID；返回 (规范SKU键, spec) 或 (None, None)
+
+        仓库 SKU ID 因国家而异，必须传入 site 才会查对应国家的列；未传 site 时不查仓库 SKU。
+        """
+        for k in keys:
+            ck = self.clean_key(k)
+            if not ck:
+                continue
+            if ck in self.box_specs:
+                return ck, self.box_specs[ck]
+            if ck in self.ext_specs:
+                canon = self.ext_specs[ck]
+                return canon, self.box_specs.get(canon)
+            if site:
+                canon = self.wh_specs.get(str(site).lower(), {}).get(ck)
+                if canon:
+                    return canon, self.box_specs.get(canon)
+        return None, None
+
     def load_box_specs(self, file_path):
-        """加载补货箱规表（包含装量与长宽高重）"""
+        """加载补货箱规表（包含装量与长宽高重）
+
+        表结构：A=SKU，B/C/D=my/th/ph 仓库SKU ID，数量，长，宽，高，重量，备注。
+        """
         self.box_spec_path = file_path
         wb = safe_load_workbook(file_path, data_only=True)
         ws = wb.active
         self.box_specs = {}
+        self.ext_specs = {}
+        self.wh_specs = {}
 
-        # 扫描表头定位长宽高重列
-        header_row = 1
-        qty_col, l_col, w_col, h_col, wt_col, note_col = 3, 4, 5, 6, 7, 8
+        # 按列名精确定位（避免 '仓库' 等词误触发 '长/宽/高/重' 等关键字）
+        cols = {}
         for c in range(1, ws.max_column + 1):
-            val = str(ws.cell(header_row, c).value or '').strip()
-            if '数量' in val or '箱规' in val:
-                qty_col = c
-            elif '长' in val:
-                l_col = c
-            elif '宽' in val:
-                w_col = c
-            elif '高' in val:
-                h_col = c
-            elif '重' in val:
-                wt_col = c
-            elif '备注' in val:
-                note_col = c
+            raw = str(ws.cell(1, c).value or '').strip()
+            if not raw:
+                continue
+            low = raw.lower().replace(' ', '')
+            m = re.match(r'^(my|th|ph)仓库sku\s*id$', raw.strip(), re.IGNORECASE)
+            if m:
+                cols.setdefault('wh_' + m.group(1).lower(), c)
+            elif '外部' in raw:
+                cols.setdefault('ext', c)
+            elif raw in ('SKU', 'sku'):
+                cols.setdefault('sku', c)
+            elif '数量' in raw or '箱规' in raw:
+                cols.setdefault('qty', c)
+            elif raw.startswith('长'):
+                cols.setdefault('l', c)
+            elif raw.startswith('宽'):
+                cols.setdefault('w', c)
+            elif raw.startswith('高'):
+                cols.setdefault('h', c)
+            elif raw.startswith('重'):
+                cols.setdefault('wt', c)
+            elif '备注' in raw:
+                cols.setdefault('note', c)
+
+        sku_col = cols.get('sku', 1)
+        qty_col = cols.get('qty', 3)
+        l_col, w_col = cols.get('l', 4), cols.get('w', 5)
+        h_col, wt_col = cols.get('h', 6), cols.get('wt', 7)
+        note_col = cols.get('note', 8)
+        ext_col = cols.get('ext')
+        wh_cols = {s: cols[k] for s, k in (('my', 'wh_my'), ('th', 'wh_th'), ('ph', 'wh_ph')) if k in cols}
+        for s in wh_cols:
+            self.wh_specs[s] = {}
 
         for r in range(2, ws.max_row + 1):
-            sku = ws.cell(r, 1).value
+            sku = ws.cell(r, sku_col).value
             if sku is not None:
                 sku_clean = self.clean_key(sku)
                 qty = ws.cell(r, qty_col).value
@@ -114,7 +160,7 @@ class ReplenishmentEngine:
                     except:
                         qty_val = None
 
-                self.box_specs[sku_clean] = {
+                spec = {
                     'qty': qty_val,
                     'length': to_num(length),
                     'width': to_num(width),
@@ -122,7 +168,36 @@ class ReplenishmentEngine:
                     'weight': to_num(weight),
                     'note': str(note).strip() if note else None
                 }
+                self.box_specs[sku_clean] = spec
+                # 按站点登记仓库 SKU ID（各国 SKU ID 不同，互不混用）
+                for s, c in wh_cols.items():
+                    wh_val = ws.cell(r, c).value
+                    if wh_val not in (None, ''):
+                        wh_clean = self.clean_key(wh_val)
+                        if wh_clean:
+                            self.wh_specs[s].setdefault(wh_clean, sku_clean)
+                # 外部 sku id 索引（旧表兼容）
+                if ext_col and ws.cell(r, ext_col).value not in (None, ''):
+                    ext_clean = self.clean_key(ws.cell(r, ext_col).value)
+                    if ext_clean and ext_clean not in self.ext_specs:
+                        self.ext_specs[ext_clean] = sku_clean
         return len(self.box_specs)
+
+    def has_box_sequence(self, summary_path, site_code):
+        """检查汇总表中该国家的 sheet 是否至少有一行带序号（箱号）。无序号则无法打包。"""
+        wb = safe_load_workbook(summary_path, data_only=True)
+        site_name_map = {'my': '马来', 'th': '泰国', 'ph': '菲律宾'}
+        target = site_name_map.get(str(site_code).lower(), site_code)
+        matched = [s for s in wb.sheetnames if target in s or str(site_code).lower() in s.lower()]
+        if not matched:
+            return False
+        ws = wb[matched[0]]
+        for r in range(4, ws.max_row + 1):
+            name = ws.cell(r, 1).value
+            seq = ws.cell(r, 3).value
+            if name and seq is not None and str(seq).strip() != '':
+                return True
+        return False
 
     #: 站点 -> 工作表别名（中文优先，避免 'th'/'my' 匹配不到中文表名而误用首表）
     SITE_SHEET_ALIASES = {
@@ -625,8 +700,11 @@ class ReplenishmentEngine:
         names = list(wb_rep.sheetnames)
         aliases = self.SITE_SHEET_ALIASES.get(str(site_code).lower(), [])
         cands = [n for n in names if any(k.lower() in n.lower() for k in aliases)] or names
-        data_sheets = [n for n in cands if '模板' not in n]
-        target_sheet = (data_sheets or cands)[-1]
+        # 优先选“日期+国家”的审批批次表（如 11.9th），避免误选 th销量 / th库存 等辅助表
+        batch_re = re.compile(r'\d+\.\d+\s*' + re.escape(str(site_code).lower()) + r'$', re.IGNORECASE)
+        batch_sheets = [n for n in cands if batch_re.search(n.strip())]
+        data_sheets = [n for n in cands if '模板' not in n and n not in batch_sheets]
+        target_sheet = (batch_sheets or [n for n in cands if '模板' not in n] or cands)[-1]
         ws_rep = wb_rep[target_sheet]
 
         rep_headers = {str(ws_rep.cell(1, c).value or '').strip(): c for c in range(1, ws_rep.max_column + 1)}
@@ -721,9 +799,17 @@ class ReplenishmentEngine:
 
             if not name and not qty:
                 continue
+            # 跳过合计行（如 "47箱 2645个"），其 B 列为文本而非数量，且 A 列为空
+            if not name and isinstance(qty, str):
+                continue
+            if name and seq is None and box_cnt is None and isinstance(qty, str):
+                continue
 
             name_clean = str(name).strip()
-            qty_num = float(qty) if qty else 0.0
+            try:
+                qty_num = float(qty) if qty not in (None, '') else 0.0
+            except (TypeError, ValueError):
+                continue
 
             if seq is not None and str(seq).strip() != '':
                 seq_str = str(seq).strip()
@@ -735,6 +821,7 @@ class ReplenishmentEngine:
                 }
                 box_groups.append(current_group)
             else:
+                # 无序号行：归入上一个填写序号的箱子组（C列空白 = 继承上一组）
                 if current_group:
                     current_group['items'].append((name_clean, qty_num))
 
@@ -750,16 +837,34 @@ class ReplenishmentEngine:
             is_multi_item = len(items) > 1
 
             for sku_name, total_qty in items:
-                sku_clean = self.clean_key(sku_name)
+                # 归一键：汇总表商品名经箱规表映射到规范 SKU（SKU 或外部SKU 任一列命中）
+                canon, spec_hit = self.find_spec(sku_name, site=site_code)
+                sku_clean = canon or self.clean_key(sku_name)
                 if sku_clean not in sku_box_map:
                     sku_box_map[sku_clean] = {}
 
-                qty_per_box = total_qty / num_boxes
-                for b_idx in boxes:
-                    sku_box_map[sku_clean][b_idx] = sku_box_map[sku_clean].get(b_idx, 0) + qty_per_box
+                # 分箱规则：
+                # - 数量 >= 箱规 × 箱数：每箱均分（原逻辑）
+                # - 数量 <  箱规 × 箱数：第一箱先装满箱规数，剩余依次装入后续箱
+                spec_qty = (spec_hit or {}).get('qty')
+                if num_boxes > 1 and spec_qty and total_qty < spec_qty * num_boxes:
+                    remain = total_qty
+                    alloc = []
+                    for b_idx in boxes:
+                        if remain <= 0:
+                            break
+                        take = min(spec_qty, remain)
+                        alloc.append((b_idx, take))
+                        remain -= take
+                else:
+                    per = total_qty / num_boxes
+                    alloc = [(b_idx, per) for b_idx in boxes]
+
+                for b_idx, qty_in_box in alloc:
+                    sku_box_map[sku_clean][b_idx] = sku_box_map[sku_clean].get(b_idx, 0) + qty_in_box
                     if b_idx not in box_sku_map:
                         box_sku_map[b_idx] = []
-                    box_sku_map[b_idx].append((sku_clean, qty_per_box))
+                    box_sku_map[b_idx].append((sku_clean, qty_in_box))
 
         # 写入 Shopee 官方打包模板
         wb_pack = safe_load_workbook(shopee_packing_template_path)
@@ -789,20 +894,18 @@ class ReplenishmentEngine:
             ext_sku = str(ws_qty.cell(r, 5).value or '').strip()
             wh_sku = str(ws_qty.cell(r, 4).value or '').strip()
 
-            # 寻找匹配的 SKU 键
+            # 寻找匹配的 SKU 键：先精确匹配（外部SKU → 商品名 → 仓库SKU），不做模糊匹配
             matched_sku = None
             for key in [ext_sku, prod_name, wh_sku]:
                 k_clean = self.clean_key(key)
-                if k_clean in sku_box_map:
+                if k_clean and k_clean in sku_box_map:
                     matched_sku = k_clean
                     break
-
-            if not matched_sku:
-                # 模糊匹配
-                for k in sku_box_map:
-                    if k in ext_sku or k in prod_name:
-                        matched_sku = k
-                        break
+                # 箱规表别名归一：外部SKU / 商品名 可能只在箱规表的一列中出现
+                canon, _ = self.find_spec(key, site=site_code)
+                if canon and canon in sku_box_map:
+                    matched_sku = canon
+                    break
 
             if matched_sku:
                 box_dist = sku_box_map[matched_sku]
@@ -855,22 +958,18 @@ class ReplenishmentEngine:
 
             for b_idx, skus_in_box in box_sku_map.items():
                 col = dim_col_start + (b_idx - 1)
-                # 判断是否为单商品整箱
-                if len(skus_in_box) == 1:
-                    sku_clean, _ = skus_in_box[0]
-                    spec = self.box_specs.get(sku_clean)
-                    if spec and spec.get('length'):
-                        ws_dim.cell(len_row, col).value = spec['length']
-                        ws_dim.cell(wid_row, col).value = spec['width']
-                        ws_dim.cell(hgt_row, col).value = spec['height']
-                        ws_dim.cell(wt_row, col).value = spec['weight']
-                    else:
-                        ws_dim.cell(len_row, col).value = None
-                        ws_dim.cell(wid_row, col).value = None
-                        ws_dim.cell(hgt_row, col).value = None
-                        ws_dim.cell(wt_row, col).value = None
+                # 按「不重复产品」数判断：同一产品跨箱（连箱）仍可取尺寸；不同产品混箱则留空
+                distinct = {sku for sku, _ in skus_in_box}
+                spec = None
+                if len(distinct) == 1:
+                    _, spec = self.find_spec(next(iter(distinct)), site=site_code)
+                if spec and spec.get('length') and len(distinct) == 1:
+                    ws_dim.cell(len_row, col).value = spec['length']
+                    ws_dim.cell(wid_row, col).value = spec['width']
+                    ws_dim.cell(hgt_row, col).value = spec['height']
+                    ws_dim.cell(wt_row, col).value = spec['weight']
                 else:
-                    # 拼箱 / 混箱：自动留空等待手动复核
+                    # 混箱（多个不同产品）或无箱规：尺寸和重量留空，等待人工复核
                     ws_dim.cell(len_row, col).value = None
                     ws_dim.cell(wid_row, col).value = None
                     ws_dim.cell(hgt_row, col).value = None

@@ -25,6 +25,7 @@ import hashlib
 import importlib
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -67,9 +68,25 @@ def site_of(payload):
 
 
 def date_of(payload):
+    """批次日期：优先用页面填写的日期；未填时从上传文件名中识别（如 11.9my库存导出表.xlsx -> 11.9）；都没有才用当天。
+
+    输出文件名以批次日期为准，避免“11.9 的补货在 11.10 上传，被命名为 11.10”。
+    """
     d = str(payload.get("date") or "").strip()
     if d:
         return d
+    for v in payload.values():
+        names = []
+        if isinstance(v, dict):
+            if isinstance(v.get("name"), str):
+                names.append(v["name"])
+            for sub in v.values():
+                if isinstance(sub, dict) and isinstance(sub.get("name"), str):
+                    names.append(sub["name"])
+        for n in names:
+            m = re.search(r"(\d{1,2})\.(\d{1,2})", n)
+            if m:
+                return "%d.%d" % (int(m.group(1)), int(m.group(2)))
     now = time.localtime()
     return "%d.%d" % (now.tm_mon, now.tm_mday)
 
@@ -348,20 +365,29 @@ def api_stage2_batch(payload):
 
 
 def api_stage3_batch(payload):
-    """阶段三（批量）：1 个汇总补货总表（含3国家sheet）+ 3 个 Shopee 打包模板 -> 输出 3 个填写后的表。"""
+    """阶段三（批量）：1 个汇总补货表（含各国家 sheet）+ 各国家 Shopee 打包模板 -> 每个国家一个已打包文件。
+
+    规则：
+    - 每个国家只使用自己的 sheet 与打包模板，互不混用。
+    - 汇总 sheet 中没有任何序号（箱号）的国家跳过并提示，不生成全 0 的表。
+    - 缺少打包模板的国家跳过并提示。
+    """
     date = date_of(payload)
     out_dir = run_dir("stage3_batch")
     engine = load_engine()
 
     summary = decode_upload(payload.get("summary"), out_dir, "汇总补货表.xlsx")
     if not summary:
-        return {"ok": False, "error": "缺少汇总补货表（含3国家sheet）"}
+        return {"ok": False, "error": "缺少汇总补货表（含各国家 sheet）"}
 
-    results, missing = {}, []
+    results, skipped = {}, []
     for site in ("my", "th", "ph"):
         pack = decode_upload((payload.get(site) or {}).get("pack"), out_dir, "%s打包模板.xlsx" % site)
         if not pack:
-            missing.append(site)
+            skipped.append("%s（缺少打包模板）" % site.upper())
+            continue
+        if not engine.has_box_sequence(summary, site):
+            skipped.append("%s（汇总表中尚无序号，请先补充序号后再打包）" % site.upper())
             continue
         out_path = os.path.join(out_dir, "%s虾皮%s_已打包.xlsx" % (date, SITE_NAMES[site]))
         out_path, groups, max_box, preview = engine.process_stage3_packing(
@@ -379,10 +405,10 @@ def api_stage3_batch(payload):
         }
 
     if not results:
-        return {"ok": False, "error": "未检测到任何国家的打包模板"}
+        return {"ok": False, "error": "没有可打包的国家：%s" % "；".join(skipped) if skipped else "未检测到任何国家的打包模板"}
     warnings = []
-    if missing:
-        warnings.append("以下国家缺少打包模板，已跳过：%s" % "、".join(s.upper() for s in missing))
+    if skipped:
+        warnings.append("以下国家已跳过：%s" % "；".join(skipped))
     return {"ok": True, "results": results, "warnings": warnings}
 
 
